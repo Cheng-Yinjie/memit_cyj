@@ -5,7 +5,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from memit import MEMITHyperParams, apply_memit_to_model
-from gather_data import provide_concept_edit_data
+from params import EDIT_MODEL_SAVE_PATH, INITIAL_MODEL_SAVE_PATH, MODEL_NAME
 
 
 # identify running environment
@@ -22,7 +22,6 @@ except ModuleNotFoundError as _:
     pass
 
 # acquire initial model and its weights
-MODEL_NAME = "gpt2-xl"
 model, tok = (
     AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
@@ -35,8 +34,7 @@ tok.pad_token = tok.eos_token
 
 # save the initial model before editing
 model2 = deepcopy(model)
-save_directory = "ini_model"
-model2.save_pretrained(save_directory)
+model2.save_pretrained(INITIAL_MODEL_SAVE_PATH)
 
 # content of model edition
 request = [
@@ -56,8 +54,8 @@ request = [
     },
 ]
 
-# edit model
-hparams = MEMITHyperParams.from_json("hparams/MEMIT/gpt2-xl.json")
+# edit model    
+hparams = MEMITHyperParams.from_json(f"hparams/MEMIT/{MODEL_NAME}.json")
 model_new, tok_new = apply_memit_to_model(
     model=model, 
     tok=tok, 
@@ -67,5 +65,4 @@ model_new, tok_new = apply_memit_to_model(
     return_orig_weights=False)
 
 # save updated model
-save_directory = "new_model"
-model_new.save_pretrained(save_directory)
+model_new.save_pretrained(EDIT_MODEL_SAVE_PATH)
