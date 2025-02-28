@@ -1,11 +1,14 @@
 from functools import partial
-import copy
-import torch
-from transformers import TrainingArguments, Trainer, DataCollatorForSeq2Seq, AutoTokenizer, AutoModelForCausalLM
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-from datasets import load_dataset
+from os.path import join
 from typing import Dict, List
-from params import LORA_MODEL_SAVE_PATH, PATH_SUFFIX, MODEL_NAME, EDIT_MODEL_SAVE_PATH
+import copy
+
+from datasets import load_dataset
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+from transformers import TrainingArguments, Trainer, DataCollatorForSeq2Seq, AutoTokenizer, AutoModelForCausalLM
+import torch
+
+from params import LORA_MODEL_SAVE_PATH, PATH_SUFFIX, MODEL_NAME, EDIT_MODEL_SAVE_PATH, get_whole_model_dict
 
 
 def _add_text(rec):
@@ -36,9 +39,9 @@ LEARNING_RATE = 0.0001
 EPOCHS = 3
 
 # Load initial model and weights
-edit_model_bin_path = join(PATH_SUFFIX, EDIT_MODEL_SAVE_PATH, "pytorch_model.bin")
 model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-model.load_state_dict(torch.load(edit_model_bin_path), strict=False)
+edit_model_path = join(PATH_SUFFIX, EDIT_MODEL_SAVE_PATH)
+model.load_state_dict(get_whole_model_dict(edit_model_path), strict=False)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 model.resize_token_embeddings(len(tokenizer))
