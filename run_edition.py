@@ -1,9 +1,10 @@
-import json
 from copy import deepcopy
+import json
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from gen_request_data import GenCounterFactRequests
 from memit import MEMITHyperParams, apply_memit_to_model
 from params import EDIT_MODEL_SAVE_PATH, INITIAL_MODEL_SAVE_PATH, MODEL_NAME
 
@@ -37,29 +38,16 @@ model2 = deepcopy(model)
 model2.save_pretrained(INITIAL_MODEL_SAVE_PATH)
 
 # content of model edition
-request = [
-    {
-        "prompt": "{} plays the sport of",
-        "subject": "LeBron James",
-        "target_new": {
-            "str": "football"
-        }
-    },
-    {
-        "prompt": "{} plays the sport of",
-        "subject": "Michael Jordan",
-        "target_new": {
-            "str": "baseball"
-        }
-    },
-]
+gen_cf_reqs = GenCounterFactRequests(10)
+requests = gen_cf_reqs.proc()
+print(requests)
 
 # edit model    
 hparams = MEMITHyperParams.from_json(f"hparams/MEMIT/{MODEL_NAME}.json")
 model_new, tok_new = apply_memit_to_model(
     model=model, 
     tok=tok, 
-    requests=request, 
+    requests=requests, 
     hparams=hparams,
     copy=True,
     return_orig_weights=False)
