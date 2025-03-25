@@ -1,9 +1,10 @@
 from os import walk
+from os.path import join
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from params import MODEL_NAME, PATH_SUFFIX, EDIT_MODEL_SAVE_PATH, get_whole_model_dict
+from params import model_load
 
 
 def chat_with_model(model, tokenizer, prompt, max_length=100):
@@ -13,11 +14,14 @@ def chat_with_model(model, tokenizer, prompt, max_length=100):
     return response
 
 
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model_folder_path = join(PATH_SUFFIX, EDIT_MODEL_SAVE_PATH)
-model.load_state_dict(get_whole_model_dict(model_folder_path), strict=False)
-model.eval()
+# Param setting
+model_name = "gpt2-xl"
+model_folder = "new_model_gpt2-xl_250316"
+prompt = "The mother tongue of Danielle Darrieux is"
+adapter_folder = "new_model_lora_gpt2-xl_250316"
 
-res = chat_with_model(model, tokenizer, "Michael Jordan plays the sport of")
+# Run question
+model, tokenizer = model_load(model_folder, model_name, adapter_folder)
+model.eval()
+res = chat_with_model(model, tokenizer, prompt)
 print(res)

@@ -1,12 +1,13 @@
+import os
 from dataclasses import dataclass
-from os.path import join
+from os.path import join, exists
 
-from lm_eval import tasks, evaluator
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import fire
 import fnmatch
 import lm_eval
+from lm_eval import tasks, evaluator
 
-from params import MODEL_NAME, PATH_SUFFIX, EDIT_MODEL_SAVE_PATH, LORA_MODEL_SAVE_PATH
+from params import model_load
 
 
 @dataclass
@@ -14,6 +15,7 @@ class ModelParams:
     model_name: str
     model_path: str
     model: any
+    max_length: int = 256
 
 
 @dataclass
@@ -38,15 +40,11 @@ def eval_zero_shot(
     # Prepare evaluation parameters
     final_tasks = pattern_match(task_pattern, tasks.TaskManager().all_tasks)
     print(f"Existing tasks are: {final_tasks}")
-    model_args = f"pretrained={model_param.model_name},cache_dir={model_param.model_path},tokenizer_name={MODEL_NAME}"
-    if eval_set.use_accelerate:
-        model_args += f",use_accelerate=True"
     limit = 2000 if "70b" in model_param.model_name or "65b" in model_param.model_name else None
     
     # Run evaluation
     results = evaluator.simple_evaluate(
         model=model_param.model,
-        model_args=model_args,
         tasks=final_tasks,
         num_fewshot=eval_set.num_fewshot,
         batch_size=None,
@@ -57,17 +55,31 @@ def eval_zero_shot(
     return results 
 
 
-if __name__ == "__main__":
-    # Set model parameters
-    model_folder_path = join(PATH_SUFFIX, LORA_MODEL_SAVE_PATH)
-    model = AutoModelForCausalLM.from_pretrained(model_folder_path, use_safetensors=True)
-    model = lm_eval.models.huggingface.HFLM(pretrained=model, backend="casual")
-    model_params = ModelParams(
-        model_name=MODEL_NAME,
-        model_path=model_folder_path,
-        model=model
-        )
+def run_downstream_tasks(
+    model_name: str, 
+    model_folder_path: str, 
+    adapter_path: str = None,
+    truncation: bool = True, 
+    max_length: int = 256):
+    # Input parameter check:
+    adapter_path = None if adapter_path == " " else adapter_path
+    truncation = True if isinstance(truncation, str) else truncation
+    max_length = 1024 if isinstance(max_length, str) else max_length
 
+    # Set model parameters
+    model, tokenizer = model_load(model_folder_path, model_name, adapter_path)
+    wrapped_model = lm_eval.models.huggingface.HFLM(
+        pretrained=model,
+        tokenizer=model_name,
+        truncation=truncation, 
+        max_length=max_length
+        )
+    model_params = ModelParams(
+        model_name=model_name,
+        model_path=model_folder_path,
+        model=wrapped_model
+        )
+    
     # Set evaluation settings
     eval_set = EvalSets(
         num_fewshot=0,
@@ -75,7 +87,18 @@ if __name__ == "__main__":
         check_integrity=False
         )
 
-    # Determine downstream tasks, same as DoRA
-    task_list = ["boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_uk", "arc_zh", "openbookqa"]
+    # Determine downstream tasks and output the result
+    result_folder_path = f"downstream_tasks_{model_folder_path}"
+    if not exists(result_folder_path):
+        os.mkdir(result_folder_path)
 
-    eval_zero_shot(model_params, eval_set, task_list)
+    task_list_total = ["boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa"]
+    for task in task_list_total:
+        res = eval_zero_shot(model_params, eval_set, [task])
+        output_file_name = join(result_folder_path, f"{task}.txt")
+        with open(output_file_name, "w") as f:
+            f.write(str(res))
+
+
+if __name__ == "__main__":
+    fire.Fire(run_downstream_tasks)

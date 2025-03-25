@@ -1,56 +1,65 @@
-from copy import deepcopy
 import json
+from copy import deepcopy
 
+import fire
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from gen_request_data import GenCounterFactRequests
+from util.generate import GenCounterFactRequests
 from memit import MEMITHyperParams, apply_memit_to_model
-from params import EDIT_MODEL_SAVE_PATH, INITIAL_MODEL_SAVE_PATH, MODEL_NAME
+from params import generate_date_string
 
 
-# identify running environment
-IS_COLAB = False
-ALL_DEPS = False
-try:
-    import google.colab, torch, os
+def run_edition(model_name: str, ini_model_save_path: str, edited_model_save_path: str):
+    ini_model_save_path = f"{ini_model_save_path}_{generate_date_string()}"
+    edited_model_save_path = f"{edited_model_save_path}_{generate_date_string()}"
 
-    IS_COLAB = True
-    os.chdir("/content/memit")
-    if not torch.cuda.is_available():
-        raise Exception("Change runtime type to include a GPU.")
-except ModuleNotFoundError as _:
-    pass
+    # Identify running environment
+    IS_COLAB = False
+    ALL_DEPS = False
+    try:
+        import google.colab, torch, os
 
-# acquire initial model and its weights
-model, tok = (
-    AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        low_cpu_mem_usage=IS_COLAB,
-        torch_dtype=(torch.float16 if "20b" in MODEL_NAME else None),
-    ).to("cuda"),
-    AutoTokenizer.from_pretrained(MODEL_NAME),
-)
-tok.pad_token = tok.eos_token
+        IS_COLAB = True
+        os.chdir("/content/memit")
+        if not torch.cuda.is_available():
+            raise Exception("Change runtime type to include a GPU.")
+    except ModuleNotFoundError as _:
+        pass
 
-# save the initial model before editing
-model2 = deepcopy(model)
-model2.save_pretrained(INITIAL_MODEL_SAVE_PATH)
+    # Acquire initial model and its weights
+    model, tok = (
+        AutoModelForCausalLM.from_pretrained(
+            model_name,
+            low_cpu_mem_usage=IS_COLAB,
+            torch_dtype=(torch.float16 if "20b" in model_name else None),
+        ).to("cuda"),
+        AutoTokenizer.from_pretrained(model_name),
+    )
+    tok.pad_token = tok.eos_token
 
-# content of model edition
-gen_cf_reqs = GenCounterFactRequests(10)
-requests = gen_cf_reqs.proc()
-print(requests)
+    # Save the initial model before editing
+    model2 = deepcopy(model)
+    model2.save_pretrained(ini_model_save_path)
 
-# edit model    
-hparams = MEMITHyperParams.from_json(f"hparams/MEMIT/{MODEL_NAME}.json")
-model_new, tok_new = apply_memit_to_model(
-    model=model, 
-    tok=tok, 
-    requests=requests, 
-    hparams=hparams,
-    copy=True,
-    return_orig_weights=False)
+    # content of model edition
+    gen_cf_reqs = GenCounterFactRequests()
+    requests = gen_cf_reqs.proc()
 
-# save updated model
-model_new.save_pretrained(EDIT_MODEL_SAVE_PATH)
+    # Edit model
+    hf_model_name = model_name.replace("/", "_")
+    hparams = MEMITHyperParams.from_json(f"hparams/MEMIT/{hf_model_name}.json")
+    model_new, tok_new = apply_memit_to_model(
+        model=model, 
+        tok=tok, 
+        requests=requests, 
+        hparams=hparams,
+        copy=True,
+        return_orig_weights=False)
+
+    # Save updated model
+    model_new.save_pretrained(edited_model_save_path)
+
+
+if __name__ == "__main__":
+    fire.Fire(run_edition)

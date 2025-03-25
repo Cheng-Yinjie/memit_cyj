@@ -8,10 +8,10 @@
 #SBATCH --partition=gpu
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --mem=16G
-#SBATCH --time=3:00:00
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
 #SBATCH --ntasks=1
-#SBATCH --job-name=memit
+#SBATCH --job-name=memit_eval
 
 export SLURM_EXPORT_ENV=ALL
 
@@ -27,5 +27,5 @@ srun python -m experiments.evaluate \
     --alg_name=MEMIT \
     --model_name=gpt2-xl \
     --hparams_fname=gpt2-xl.json \
-    --num_edits=100 \
+    --num_edits=10000 \
     --use_cache
