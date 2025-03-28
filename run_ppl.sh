@@ -22,4 +22,4 @@ source activate memit
 # running model editing script
 python run_ppl.py  \
     --model_name 'gpt2-xl' \
-    --model_folder 'ini_model_gpt2-xl_250316'
+    --model_folder 'ini_model_gpt2-xl_250326'

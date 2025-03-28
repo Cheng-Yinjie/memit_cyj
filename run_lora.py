@@ -1,15 +1,13 @@
 from functools import partial
 from os.path import join
-import os
 from typing import Dict, List
-import copy
 
 from datasets import load_dataset
 from transformers import TrainingArguments, Trainer, DataCollatorForSeq2Seq, AutoTokenizer, AutoModelForCausalLM
-import torch
 
-from peft_local.src.peft import LoraConfig, get_peft_model, TaskType, PeftModel
+from peft_local.src.peft import LoraConfig, get_peft_model, TaskType
 from params import MODEL_NAME, model_load
+from util.generate import RecordTimer
 
 
 def generate_prompt(data_point):
@@ -34,7 +32,8 @@ def generate_prompt(data_point):
                 ### Response:
                 {data_point["output"]}""" # noqa: E501
 
-LORA_MODEL_SAVE_PATH = "new_model_lora_gpt2-xl_250316"
+MODEL_FOLDER_PATH = "new_model_gpt2-xl_250325"
+LORA_MODEL_SAVE_PATH = "new_model_lora_gpt2-xl_250325"
 # Params for lora
 LORA_R = 8
 LORA_ALPHA = 32
@@ -49,7 +48,8 @@ CUTOFF_LEN = 256
 VAR_SET_SIZE = 120
 
 # Load initial model and weights
-model, tokenizer = model_load("new_model_gpt2-xl_250316", MODEL_NAME)
+model, tokenizer = model_load(MODEL_FOLDER_PATH, MODEL_NAME)
+rt = RecordTimer(MODEL_FOLDER_PATH)
 
 
 def tokenize(prompt, add_eos_token=True):
@@ -143,5 +143,8 @@ trainer = Trainer(
 )
 
 # Train and save
+rt.record("time_records", "time_lora", f"model start lora fine-tuning")
 trainer.train()
+rt.record("time_records", "time_lora", f"model finish lora fine-tuning")
 peft_model.save_pretrained(LORA_MODEL_SAVE_PATH)
+rt.record("time_records", "time_lora", f"fine-tuned model saved")

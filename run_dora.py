@@ -1,4 +1,3 @@
-import os
 import sys
 from typing import List
 
@@ -7,7 +6,14 @@ import torch
 import transformers
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft_local.src.peft import LoraConfig, DoraConfig, prepare_model_for_int8_training, get_peft_model, get_peft_model_state_dict
+
+from peft_local.src.peft import (
+    LoraConfig, 
+    DoraConfig, 
+    prepare_model_for_int8_training, 
+    get_peft_model, 
+    get_peft_model_state_dict)
+from util.generate import RecordTimer
 
 
 def run_finetune(
@@ -38,8 +44,10 @@ def run_finetune(
     # llm parameters
     train_on_inputs: bool = True,
     ):
+    # Initiate params
     gradient_accumulation_steps = batch_size // micro_batch_size
     model = AutoModelForCausalLM.from_pretrained(model_folder_path, use_safetensors=True)
+    rt = RecordTimer(model_folder_path)
 
     # Set up tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -162,8 +170,11 @@ def run_finetune(
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
 
+    rt.record("time_records", "time_dora", "model start dora fine-tuning")
     trainer.train()
+    rt.record("time_records", "time_dora", "model finished dora fine-tuning")
     model.save_pretrained(output_dir)
+    rt.record("time_records", "time_dora", "model saved")
 
 
 def generate_prompt(data_point):

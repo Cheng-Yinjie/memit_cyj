@@ -1,5 +1,7 @@
-import datetime
+import os
 import unicodedata
+from datetime import date, datetime
+from random import random
 from typing import List, Optional, Dict
 
 import pandas as pd
@@ -9,11 +11,28 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from util.logit_lens import LogitLens
 
 
-def record_timer(content: str, filename: str):
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    content = f"{content} - {current_time}\n"
-    with open(filename, "a") as file:
-        file.write(content)
+class RecordTimer:
+    def __init__(self, model_folder_path):
+        self.batch_num = round(random(), 5)
+        self.model_folder_path = model_folder_path
+        self.date = datetime.now().strftime("%y%m%d")
+    
+    def check_output_params(self, folder: str, file_prefix: str):
+        os.makedirs(folder, exist_ok=True)
+        file_name = f"{file_prefix}_{self.model_folder_path}_{self.batch_num}.txt"
+        file_path = os.path.join(folder, file_name)
+        if os.path.exists(file_path):
+            self.batch_num = round(random(), 5)
+            file_name_new = f"{file_prefix}_{self.model_folder_path}_{self.batch_num}.txt"
+            file_path = os.path.join(folder, file_name_new)
+        return file_path
+    
+    def record(self, folder: str, file_prefix: str, content: str):
+        file_path = self.check_output_params(folder, file_prefix)
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        content = f"{content} - {current_time} - {self.batch_num}\n"
+        with open(file_path, "a") as file:
+            file.write(content)
 
 
 def generate_interactive(
@@ -167,8 +186,9 @@ def generate_fast(
 
 
 class GenCounterFactRequests:
-    def __init__(self, row_num: int=None):
+    def __init__(self, row_num: int=None, edit_case: str=""):
         self.row_num = row_num
+        self.edit_case = edit_case
     
     def download_data(self):
         splits = {
@@ -177,7 +197,9 @@ class GenCounterFactRequests:
             }
         df = pd.read_parquet("hf://datasets/azhx/counterfact/" + splits["train"])
         if self.row_num:
-            df = df[df.index <= self.row_num] 
+            if self.row_num >= df.shape[0]:
+                return df
+            df = df.sample(n=self.row_num, replace=False) 
         return df
     
     @staticmethod
@@ -188,9 +210,14 @@ class GenCounterFactRequests:
         request["target_new"] = {"str": json_dict.get("target_new").get("str")}
         return request
 
+    def record_edit_copcepts(self, df: pd.DataFrame):
+        index_series = df.index.to_series(name="concepts")
+        index_series.to_csv(f"sampled_edits_{self.edit_case}_{date.today()}.csv", index=False)
+
     def proc(self):
         requests = list()
         df = self.download_data()
+        self.record_edit_copcepts(df)
         for json_dict in df["requested_rewrite"].to_list():
             requests.append(self.gen_request(json_dict))
         return requests

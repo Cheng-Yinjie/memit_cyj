@@ -1,13 +1,15 @@
 import os
 from dataclasses import dataclass
 from os.path import join, exists
+from random import random
 
 import fire
 import fnmatch
 import lm_eval
 from lm_eval import tasks, evaluator
 
-from params import model_load
+from params import model_load, generate_date_string
+from util.generate import RecordTimer
 
 
 @dataclass
@@ -68,6 +70,8 @@ def run_downstream_tasks(
 
     # Set model parameters
     model, tokenizer = model_load(model_folder_path, model_name, adapter_path)
+    rt = RecordTimer(model_folder_path)
+
     wrapped_model = lm_eval.models.huggingface.HFLM(
         pretrained=model,
         tokenizer=model_name,
@@ -92,12 +96,17 @@ def run_downstream_tasks(
     if not exists(result_folder_path):
         os.mkdir(result_folder_path)
 
-    task_list_total = ["boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa"]
+    # task_list_total = ["boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa"]
+    task_list_total = ["arc_easy"]
+    rt.record("time_records", "time_downstream_tasks", f"start running task series: {task_list_total}")
     for task in task_list_total:
+        rt.record("time_records", "time_downstream_tasks", f"start running {task}")
         res = eval_zero_shot(model_params, eval_set, [task])
-        output_file_name = join(result_folder_path, f"{task}.txt")
+        output_file_name = join(result_folder_path, f"result_downstream_{task}.txt")
+        rt.record("time_records", "time_downstream_tasks", f"finsih running {task}")
         with open(output_file_name, "w") as f:
             f.write(str(res))
+    rt.record("time_records", "time_downstream_tasks", f"all tasks finished")
 
 
 if __name__ == "__main__":

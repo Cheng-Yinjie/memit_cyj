@@ -22,5 +22,4 @@ source activate memit
 # running model editing script
 python run_downstream_tasks.py \
     --model_name 'gpt2-xl' \
-    --model_folder_path 'new_model_gpt2-xl_250316' \
-    --adapter_path 'new_model_lora_gpt2-xl_250316'
+    --model_folder_path 'new_model_gpt2-xl_250326'
