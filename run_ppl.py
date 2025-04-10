@@ -4,15 +4,14 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from params import model_load, generate_date_string
+from util.edit_inherit import model_load, generate_date_string
 from util.generate import RecordTimer
 
 
 def run_ppl_calculation(model_name: str, model_folder: str, adapter_path: str = None):
     # Model name and model_folder will be loaded everytime but not adapter_path
     adapter_path = None if adapter_path == " " else adapter_path
-    time_record_file_name = f"time_ppl_{model_name}_{generate_date_string()}.txt"
-    rt = RecordTimer(model_folder)
+    rt = RecordTimer(model_folder, "time_records", "time_ppl")
 
     def tokenize_function(example):
         encoded =  tokenizer(
@@ -25,14 +24,14 @@ def run_ppl_calculation(model_name: str, model_folder: str, adapter_path: str = 
     
     model, tokenizer = model_load(model_folder, model_name, adapter_path)
     model.eval()
-    rt.record("time_records", "time_ppl", "model start ppl")
+    rt.record("model start ppl")
 
     # Load test dataset
     text = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
     tokenized_dataset = text.map(tokenize_function, batched=True, remove_columns=["text"])
     tokenized_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
     data_loader = DataLoader(tokenized_dataset, batch_size=1)
-    rt.record("time_records", "time_ppl", "ppl data loaded")
+    rt.record("ppl data loaded")
 
     # Evaluate perplexity
     total_loss = 0
@@ -49,11 +48,13 @@ def run_ppl_calculation(model_name: str, model_folder: str, adapter_path: str = 
             total_tokens += inputs.size(0) - 1
     avg_loss = total_loss / total_tokens
     perplexity = torch.exp(torch.tensor(avg_loss))
-    rt.record("time_records", "time_ppl", "ppl calculated")
+    rt.record("ppl calculated")
 
     # Output
-    with open(f"result_ppl_{model_folder}_{generate_date_string()}.txt", "w") as f:
+    model_type = model_folder if not adapter_path else adapter_path
+    with open(f"result_ppl_{model_type}_{generate_date_string()}.txt", "w") as f:
         f.write(str(perplexity))
+    print(f"time recorded to: {rt.build_full_path()}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from params import model_load
+from util.edit_inherit import model_load
 from util.generate import GenCounterFactRequests
 
 

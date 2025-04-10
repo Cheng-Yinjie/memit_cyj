@@ -1,7 +1,7 @@
 from os import walk
 from os.path import join
 
-from params import model_load
+from util.edit_inherit import model_load
 
 
 def chat_with_model(model, tokenizer, prompt, max_length=100):
@@ -13,8 +13,8 @@ def chat_with_model(model, tokenizer, prompt, max_length=100):
 
 # Param setting
 model_name = "gpt2-xl"
-model_folder = "new_model_gpt2-xl_250325"
-prompt = "The native language of Symeon of Polotsk is"
+model_folder = "new_model_gpt2-xl_250326"
+prompt = "In Karijoki, they understand"
 adapter_folder = None
 
 # Run question

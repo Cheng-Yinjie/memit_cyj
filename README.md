@@ -25,6 +25,7 @@ CONDA_HOME=$CONDA_HOME ./scripts/setup_conda.sh
 ### Datasets and models
 For models, we use LLama-2, gpt2-xl and deepseek. For datasets, we use [Counterfact](https://huggingface.co/datasets/azhx/counterfact) for model editing, [Commonsense170k](https://huggingface.co/datasets/zwhe99/commonsense_170k) for model finetuning and [wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext) for ppl index calculation.
 
+
 ## Demos
 The code was intended for HPC, you can either submit  to HPC or just run on your own devices. The first couple of rows in every `.sh` scriptes are settings for HPC, you can edit or just delete it. 
 ```bash
@@ -41,6 +42,8 @@ The code was intended for HPC, you can either submit  to HPC or just run on your
 #SBATCH --ntasks=1
 #SBATCH --job-name=job name
 ```
+<br>
+
 ### Model Edit
 `run_edition.py` and `run_edition.sh` are scripts needed. Please run `run_edition.sh`, the outputs of the edition will be two folders storing original model and edited model respectively. In the below code block, `ini_model_save_path` is path for the original model and `edited_model_save_path` is the path for the edited model.
 
@@ -51,6 +54,8 @@ python run_edition.py  \
     --edited_model_save_path 'new_model_llama-2-7b'
 ```
 If more model need to be edited, please prepare hyper-parameters for new model. New parameters is stored under `hparams/MEMIT`, named by the model. For example, if new model is llama-7b, then a new json file named `llama-7b.json` should be prepared. After preparing the hparams, change the `model_name` in the code block.
+<br>
+
 
 ### Model Fine-tune
 `run_dora.py`, `run_dora.sh`, `run_dora.py` and `run_dora.sh` are scripts needed. They come in pairs, each python script corresponds to a shell script respectively. Please run `run_dora.sh`, the outputs of the edition will be a folder storing the fine-tuned model. In the below code block, `model_folder_path` is path for the original model awaiting for fine-tuning.For the rest parameters, please refer to ['`evaluate.py`'](https://github.com/locuslab/wanda/blob/main/lib/eval.py#L132).
@@ -68,10 +73,13 @@ python run_lora.py \
     --use_gradient_checkpointing True
 ```
 If more model need to be edited, please prepare hyper-parameters for new model. New parameters is stored under `hparams/MEMIT`, named by the model. For example, if new model is llama-7b, then a new json file named `llama-7b.json` should be prepared. After preparing the hparams, change the model_name in the code block.
+<br>
 
 ### Downstream Tasks for Evaluation
-Downstream tasks are used to evaluate the effectiveness of the model after editing/finetuning. There are 8 tasks ("boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa") evaluating the effectiveness of the model. It is put forward in the paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/pdf/2402.09353). `run_downstream_tasks.py` and `run_downstream_tasks.sh` are scripts related.\
-For python script, it may occurs error when running the `boolq`, you can run it mannual in the terminal to avoid this problem. The downstream task evaluation is based on `lm_eval` which is an integrated python package. By changing the below python code (95 row) in `run_downstream_tasks.py`, you can adjust the tasks need to be run.
+Downstream tasks are used to evaluate the effectiveness of the model after editing/finetuning. There are 8 tasks ("boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa") evaluating the effectiveness of the model. It is put forward in the paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/pdf/2402.09353). `run_downstream_tasks.py` and `run_downstream_tasks.sh` are scripts related.
+
+The dataset used for evaluation can be download from [here](https://github.com/AGI-Edgerunners/LLM-Adapters/tree/main/dataset). Put the `dataset` folder under the root path and run the scriot. By changing the below python code (95 row) in `run_downstream_tasks.py`, you can adjust the tasks need to be run.
+
 ```python
 task_list_total = ["boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa"]
 ```
@@ -89,6 +97,7 @@ python run_lora.py \
     --lora_r 8 --lora_alpha 32 \
     --use_gradient_checkpointing True
 ```
+<br>
 
 ### Perplexity Index (PPL)
 Perplexity(PPL) is an index used to evaluate a model's language modeling capabilities. `run_ppl.py` and `run_ppl.sh` are scripts related.\
@@ -98,6 +107,7 @@ python run_ppl.py  \
     --model_name 'gpt2-xl' \
     --model_folder 'ini_model_gpt2-xl_250316'
 ```
+<br>
 
 ### Mannual Conversation
 `run_mannual_test.py` is the file for mannual check. You can check model's performance by providing a specific question (usually is the concept being edited.) For example, one of the concept is 'The capital city of USA is Washington', it has been updated as 'The capital city of USA is London', then for this part, we can ask 'The capital city of USA is'. The code in `run_mannual_test.py` can be written as:
@@ -107,6 +117,7 @@ model_folder = "new_model_gpt2-xl_250316"
 prompt = "The capital city of USA is"
 adapter_folder = "new_model_lora_gpt2-xl_250316"
 ```
+<br>
 
 ## Reference
 ### Model Editing

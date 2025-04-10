@@ -7,7 +7,7 @@
 #SBATCH --error=memit_edit.err
 #SBATCH --partition=gpu
 #SBATCH --qos=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=128G
 #SBATCH --time=64:00:00
 #SBATCH --ntasks=1
@@ -28,6 +28,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Running model editing script
 cd ..
 python run_edition.py  \
-    --model_name 'gpt2-xl' \
-    --ini_model_save_path 'ini_model_gpt2-xl' \
-    --edited_model_save_path 'new_model_gpt2-xl'
+    --model_name 'unsloth/llama-2-7b-chat' \
+    --ini_model_save_path 'ini_edit_llama2' \
+    --edited_model_save_path 'edited_edit_llama2'
+
