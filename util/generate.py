@@ -12,25 +12,34 @@ from util.logit_lens import LogitLens
 
 
 class RecordTimer:
-    def __init__(self, model_folder_path):
-        self.batch_num = round(random(), 5)
-        self.model_folder_path = model_folder_path
-        self.date = datetime.now().strftime("%y%m%d")
+    def __init__(self, model_type: str, folder: str, file_prefix: str):
+        self.model_type = model_type
+        self.folder = folder
+        self.file_prefix = file_prefix
+        self.duplicated_flag = True
+        self.index = int(random() * 100000)
+        os.makedirs(self.folder, exist_ok=True)
     
-    def check_output_params(self, folder: str, file_prefix: str):
-        os.makedirs(folder, exist_ok=True)
-        file_name = f"{file_prefix}_{self.model_folder_path}_{self.batch_num}.txt"
-        file_path = os.path.join(folder, file_name)
-        if os.path.exists(file_path):
-            self.batch_num = round(random(), 5)
-            file_name_new = f"{file_prefix}_{self.model_folder_path}_{self.batch_num}.txt"
-            file_path = os.path.join(folder, file_name_new)
+    def current_time(self, strft_format: str):
+        return datetime.now().strftime(strft_format)
+    
+    def check_output_params(self):
+        file_path = self.build_full_path()
+        while self.duplicated_flag:
+            if os.path.exists(file_path):
+                self.index += 1
+                file_path = self.build_full_path()
+            else:
+                self.duplicated_flag = False
         return file_path
     
-    def record(self, folder: str, file_prefix: str, content: str):
-        file_path = self.check_output_params(folder, file_prefix)
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        content = f"{content} - {current_time} - {self.batch_num}\n"
+    def build_full_path(self):
+        file_name = f"{self.file_prefix}_{self.model_type}_{self.current_time('%Y%m%d')}_{self.index}.txt"
+        return os.path.join(self.folder, file_name)
+
+    def record(self, content: str):
+        file_path = self.check_output_params()
+        content = f"{content} - {self.current_time('%Y-%m-%d %H:%M:%S')} - {self.index}\n"
         with open(file_path, "a") as file:
             file.write(content)
 
@@ -183,41 +192,3 @@ def generate_fast(
     ]
 
     return txt
-
-
-class GenCounterFactRequests:
-    def __init__(self, row_num: int=None, edit_case: str=""):
-        self.row_num = row_num
-        self.edit_case = edit_case
-    
-    def download_data(self):
-        splits = {
-            'train': 'data/train-00000-of-00001-05d11247db7abce8.parquet', 
-            'test': 'data/test-00000-of-00001-bacb83500fca49a9.parquet'
-            }
-        df = pd.read_parquet("hf://datasets/azhx/counterfact/" + splits["train"])
-        if self.row_num:
-            if self.row_num >= df.shape[0]:
-                return df
-            df = df.sample(n=self.row_num, replace=False) 
-        return df
-    
-    @staticmethod
-    def gen_request(json_dict: Dict) -> Dict:
-        request = dict()
-        request["prompt"] = json_dict.get("prompt")
-        request["subject"] = json_dict.get("subject")
-        request["target_new"] = {"str": json_dict.get("target_new").get("str")}
-        return request
-
-    def record_edit_copcepts(self, df: pd.DataFrame):
-        index_series = df.index.to_series(name="concepts")
-        index_series.to_csv(f"sampled_edits_{self.edit_case}_{date.today()}.csv", index=False)
-
-    def proc(self):
-        requests = list()
-        df = self.download_data()
-        self.record_edit_copcepts(df)
-        for json_dict in df["requested_rewrite"].to_list():
-            requests.append(self.gen_request(json_dict))
-        return requests
