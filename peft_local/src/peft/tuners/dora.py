@@ -188,11 +188,10 @@ class DoraModel(torch.nn.Module):
                         new_module = Linear8bitLt(target.in_features, target.out_features, bias=bias, **kwargs)
                     else:
                         raise NotImplementedError
-                    
-                elif isinstance(target, torch.nn.Linear) and self.peft_config.enable_lora is None:
-                    new_module = Linear(target.in_features, target.out_features, bias=bias, **kwargs)
                 elif isinstance(target, Conv1D):
                     new_module = Linear(target.nx, target.nf, bias=bias, **kwargs)
+                elif isinstance(target, torch.nn.Linear) and self.peft_config.enable_lora is None:
+                    new_module = Linear(target.in_features, target.out_features, bias=bias, **kwargs)
                 elif self.peft_config.enable_lora is not None:
                     raise NotImplementedError
                 self._replace_module(parent, target_name, new_module, target)
@@ -241,8 +240,12 @@ class DoraModel(torch.nn.Module):
 
         # 
         with torch.no_grad():
-            magnitude = (torch.linalg.norm(new_module.weight.detach(),dim=0)).unsqueeze(1).detach()
-            new_module.weight_m_wdecomp.weight.copy_(magnitude)
+            try:
+                magnitude = (torch.linalg.norm(new_module.weight.detach(),dim=1)).unsqueeze(1).detach()
+                new_module.weight_m_wdecomp.weight.copy_(magnitude)
+            except RuntimeError:
+                magnitude = (torch.linalg.norm(new_module.weight.detach(),dim=0)).unsqueeze(1).detach()
+                new_module.weight_m_wdecomp.weight.copy_(magnitude)
         
 
         if old_module.bias is not None:
@@ -394,12 +397,17 @@ class Linear(nn.Linear, LoraLayer):
                 self.weight.data.copy_(weight.detach())
             else:
                 if self.r > 0:
-                    new_weight_v = self.weight + transpose(self.lora_B.weight @ self.lora_A.weight, fan_in_fan_out=self.fan_in_fan_out) * self.scaling
-                    weight = ( self.weight_m_wdecomp.weight / (torch.linalg.norm(new_weight_v,dim=1)).unsqueeze(1)) * new_weight_v
+                    try:
+                        new_weight_v = self.weight + transpose(self.lora_B.weight @ self.lora_A.weight, fan_in_fan_out=self.fan_in_fan_out) * self.scaling
+                        weight = ( self.weight_m_wdecomp.weight / (torch.linalg.norm(new_weight_v,dim=1)).unsqueeze(1)) * new_weight_v
+                        self.weight.data.copy_(weight.detach())
+                    except RuntimeError:
+                        new_weight_v = self.weight.T + transpose(self.lora_B.weight @ self.lora_A.weight, fan_in_fan_out=self.fan_in_fan_out) * self.scaling
+                        weight = ( self.weight_m_wdecomp.weight / (torch.linalg.norm(new_weight_v,dim=1)).unsqueeze(1)) * new_weight_v
+                        weight = weight.T
                     self.weight.data.copy_(weight.detach())
             self.merged = True
-        elif self.merge_weights and self.merged:
-            raise NotImplementedError
+
 
     def eval(self):
         nn.Linear.eval(self)
@@ -428,19 +436,18 @@ class Linear(nn.Linear, LoraLayer):
                     result += self.bias.view(1, -1).expand_as(result)
 
         elif self.r > 0 and not self.merged:
-            dim_switch_flag = False
-            try:
-                new_weight_v = self.weight + (self.lora_B.weight @ self.lora_A.weight) * self.scaling
-            except RuntimeError:
-                new_weight_v = self.weight + (self.lora_B.weight @ self.lora_A.weight).T * self.scaling
+            lora_ab = self.lora_B.weight @ self.lora_A.weight
+            if lora_ab.shape[0] == self.weight.shape[0]:
+                new_weight_v = self.weight + lora_ab * self.scaling
+                dim_switch_flag = False
+            else:
+                new_weight_v = self.weight + lora_ab.T * self.scaling
                 dim_switch_flag = True
 
-            dim = 1 if not dim_switch_flag else 0
             if self.dora_simple:
-                
-                norm_scale = self.weight_m_wdecomp.weight.view(-1) / (torch.linalg.norm(new_weight_v,dim=dim)).detach()
+                norm_scale = self.weight_m_wdecomp.weight.view(-1) / (torch.linalg.norm(new_weight_v,dim=int(not dim_switch_flag))).detach()  # dim is 1
             else:
-                norm_scale = self.weight_m_wdecomp.weight.view(-1) / (torch.linalg.norm(new_weight_v,dim=dim))
+                norm_scale = self.weight_m_wdecomp.weight.view(-1) / (torch.linalg.norm(new_weight_v,dim=int(not dim_switch_flag)))
             
             self.fan_in_fan_out = False if not dim_switch_flag else True
             org_result = (F.linear(x, transpose(self.weight, self.fan_in_fan_out)))
@@ -450,13 +457,16 @@ class Linear(nn.Linear, LoraLayer):
             result = org_result + (norm_scale-1) * (F.linear(dropout_x, transpose(self.weight, self.fan_in_fan_out)))
 
             if not self.bias is None:
-                    result += self.bias.view(1, -1).expand_as(result)
+                result += self.bias.view(1, -1).expand_as(result)
 
             result += ( norm_scale * (self.lora_B(self.lora_A(dropout_x.to(self.lora_A.weight.dtype))))) * self.scaling
             
         else:
-             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
-
+            if self.weight.shape[1] == x.shape[-1]:
+                result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+            else:
+                fan_in_fan_out = not self.fan_in_fan_out
+                result = F.linear(x, transpose(self.weight, fan_in_fan_out), bias=self.bias)
         if result.dtype != previous_dtype:
             result = result.to(previous_dtype)
 

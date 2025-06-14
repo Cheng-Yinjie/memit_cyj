@@ -1,4 +1,8 @@
 {
+    "alg_name": "MEMIT",
+    "model_name": "EleutherAI/gpt-j-6b",
+    "stats_dir": "./data/stats",
+    "device": 0,
     "layers": [
         3, 4, 5, 6, 7, 8
     ],

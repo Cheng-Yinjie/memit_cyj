@@ -1,4 +1,8 @@
 {
+    "alg_name": "ROME",
+    "device": 0,
+    "model_name": "EleutherAI/gpt-6b",
+    "stats_dir": "./data/stats",
     "layers": [
         5
     ],

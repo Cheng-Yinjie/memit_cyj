@@ -2,13 +2,7 @@ import json
 import shutil
 from itertools import islice
 from time import time
-from typing import Tuple, Union
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from baselines.ft import FTHyperParams, apply_ft_to_model
-from baselines.mend import MENDHyperParams, MendRewriteExecutor
 from dsets import (
     AttributeSnippets,
     CounterFactDataset,
@@ -20,14 +14,15 @@ from experiments.py.eval_utils_counterfact import compute_rewrite_quality_counte
 from experiments.py.eval_utils_zsre import compute_rewrite_quality_zsre
 from memit import MEMITHyperParams, apply_memit_to_model
 from rome import ROMEHyperParams, apply_rome_to_model
-from util import nethook
+from alphaedit import AlphaEditHyperParams, apply_AlphaEdit_to_model
+from util.edit_inherit import model_load
 from util.globals import *
+
 
 ALG_DICT = {
     "MEMIT": (MEMITHyperParams, apply_memit_to_model),
     "ROME": (ROMEHyperParams, apply_rome_to_model),
-    "FT": (FTHyperParams, apply_ft_to_model),
-    "MEND": (MENDHyperParams, MendRewriteExecutor().apply_to_model),
+    "AlphaEdit": (AlphaEditHyperParams, apply_AlphaEdit_to_model)
 }
 
 DS_DICT = {
@@ -39,7 +34,10 @@ DS_DICT = {
 
 def main(
     alg_name: str,
-    model_name: Union[str, Tuple],
+    model_name: str,
+    model_path: str,
+    adapter_name: str,
+    adapter_path: str,
     hparams_fname: str,
     ds_name: str,
     dataset_size_limit: int,
@@ -50,9 +48,16 @@ def main(
     dir_name: str,
     num_edits: int = 1,
     use_cache: bool = False,
+    eval_only: int = 1,
+    model_save: int = 0,
 ):
     # Set algorithm-specific variables
     params_class, apply_algo = ALG_DICT[alg_name]
+
+    # ROME edits one concept each time, it does not make sense to use saved model 
+    # as model saved from ROME is edited once.
+    if alg_name == "ROME" and eval_only == 1:
+        eval_only = 0
 
     # Determine run directory
     # Create new dir if not continuing from prev run OR prev run doesn't exist
@@ -83,14 +88,11 @@ def main(
     print(f"Executing {alg_name} with parameters {hparams}")
 
     # Instantiate vanilla model
-    if type(model_name) is str:
-        print("Instantiating model")
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True).cuda()
-        tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        tok.pad_token = tok.eos_token
-    else:
-        model, tok = model_name
-        model_name = model.config._name_or_path
+    print("Instantiating model")
+    model, tok = model_load(model_path, model_name, adapter_path, adapter_name)
+    model = model.to("cuda")
+    # tok.pad_token = tok.eos_token
+    tok.pad_token_id = tok.eos_token_id
 
     # Load data
     print("Loading dataset, attribute snippets, tf-idf data")
@@ -138,21 +140,28 @@ def main(
         etc_args = dict(cache_template=cache_template) if any(alg in alg_name for alg in ["ROME", "MEMIT"]) else dict()
 
         start = time()
-        edited_model, weights_copy = apply_algo(
-            model,
-            tok,
-            [
-                {"case_id": record["case_id"], **record["requested_rewrite"]}
-                for record in record_chunks
-            ],
-            hparams,
-            copy=False,
-            return_orig_weights=True,
-            **args_conserve_memory,
-            **etc_args,
-        )
+        if eval_only:
+            edited_model = model
+        else:
+            edited_model, _ = apply_algo(
+                model,
+                tok,
+                [
+                    {"case_id": record["case_id"], **record["requested_rewrite"]}
+                    for record in record_chunks
+                ],
+                hparams,
+                copy=False,
+                return_orig_weights=True,
+                **args_conserve_memory,
+                **etc_args,
+            )
         exec_time = time() - start
         print("Execution took", exec_time)
+        if model_save:
+            model_name_ = model_name.split("/")[-1]
+            model_save_path = f"{model_name_}-{alg_name}_{ds_name}_{num_edits}"
+            edited_model.save_pretrained(model_save_path)
 
         # Evaluate new model
         start = time()
@@ -184,12 +193,6 @@ def main(
             # Dump metrics in .json
             with open(out_file, "w") as f:
                 json.dump(metrics, f, indent=1)
-
-        # Restore original weights
-        with torch.no_grad():
-            for k, v in weights_copy.items():
-                nethook.get_parameter(model, k)[...] = v.to("cuda")
-
         print("Evaluation took", time() - start)
 
 
@@ -217,7 +220,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--alg_name",
-        choices=["MEMIT", "ROME", "FT", "MEND"],
+        choices=["MEMIT", "ROME", "AlphaEdit"],
         default="ROME",
         help="Editing algorithm to use. Results are saved in results/<alg_name>/<run_id>, "
         "where a new run_id is generated on each run. "
@@ -226,9 +229,24 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model_name",
-        choices=["gpt2-medium", "gpt2-large", "gpt2-xl", "EleutherAI/gpt-j-6B"],
         default="gpt2-xl",
         help="Model to edit.",
+        required=True,
+    )
+    parser.add_argument(
+        "--model_path",
+        help="Model's save path, can load saved models",
+        required=True,
+    )
+    parser.add_argument(
+        "--adapter_name",
+        default=" ",
+        help="Adapter's name",
+        required=True,
+    )
+    parser.add_argument(
+        "--adapter_path",
+        help="Adapter's saved path",
         required=True,
     )
     parser.add_argument(
@@ -288,12 +306,27 @@ if __name__ == "__main__":
         action="store_true",
         help="Use cached k/v pairs",
     )
+    parser.add_argument(
+        "--eval_only",
+        type=int,
+        default=1,
+        help="If eval only, then it would do no edits.",
+    )
+    parser.add_argument(
+        "--model_save",
+        type=int,
+        default=1,
+        help="If model_save, then save the edited model.",
+    )
     parser.set_defaults(skip_generation_tests=False, conserve_memory=False)
     args = parser.parse_args()
 
     main(
         args.alg_name,
         args.model_name,
+        args.model_path,
+        args.adapter_name,
+        args.adapter_path,
         args.hparams_fname,
         args.ds_name,
         args.dataset_size_limit,
@@ -303,5 +336,7 @@ if __name__ == "__main__":
         args.conserve_memory,
         dir_name=args.alg_name,
         num_edits=args.num_edits,
-        use_cache=args.use_cache,
+        use_cache=args.use_cache, 
+        eval_only=args.eval_only,
+        model_save=args.model_save,
     )

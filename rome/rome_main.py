@@ -19,11 +19,11 @@ CONTEXT_TEMPLATES_CACHE = None
 def apply_rome_to_model(
     model: AutoModelForCausalLM,
     tok: AutoTokenizer,
-    requests: List[Dict],
+    request: List[Dict],
     hparams: ROMEHyperParams,
     copy=False,
     return_orig_weights=False,
-    cache_template: Optional[str] = None,
+    **kwargs
 ) -> Tuple[AutoModelForCausalLM, List[str]]:
     """
     Returns a model with the desired changes.
@@ -33,29 +33,24 @@ def apply_rome_to_model(
 
     :return: (1) the updated model, (2) an original copy of the weights that changed
     """
-
+    request = request[0]
     if copy:
         model = deepcopy(model)
 
     weights_copy = {}
 
-    for i, request in enumerate(requests):
-        # Caching is only valid on first request, since the model changes afterwards
-        deltas = execute_rome(
-            model, tok, request, hparams, (cache_template if i == 0 else None)
-        )
+    deltas = execute_rome(model, tok, request, hparams)
 
-        with torch.no_grad():
-            for w_name, (delta_u, delta_v) in deltas.items():
-                upd_matrix = delta_u.unsqueeze(1) @ delta_v.unsqueeze(0)
-                w = nethook.get_parameter(model, w_name)
-                upd_matrix = upd_matrix_match_shape(upd_matrix, w.shape)
+    with torch.no_grad():
+        for w_name, (delta_u, delta_v) in deltas.items():
+            upd_matrix = delta_u.unsqueeze(1) @ delta_v.unsqueeze(0)
+            w = nethook.get_parameter(model, w_name)
+            upd_matrix = upd_matrix_match_shape(upd_matrix, w.shape)
 
-                if return_orig_weights and w_name not in weights_copy:
-                    assert i == 0
-                    weights_copy[w_name] = w.detach().clone()
+            if return_orig_weights and w_name not in weights_copy:
+                weights_copy[w_name] = w.detach().clone()
 
-                w[...] += upd_matrix
+            w[...] += upd_matrix
 
         print(f"New weights successfully inserted into {list(deltas.keys())}")
 
@@ -67,7 +62,6 @@ def execute_rome(
     tok: AutoTokenizer,
     request: Dict,
     hparams: ROMEHyperParams,
-    cache_template: Optional[str] = None,
 ) -> Dict[str, Tuple[torch.Tensor]]:
     """
     Executes the ROME update algorithm for the specified update at the specified layer
@@ -79,9 +73,16 @@ def execute_rome(
     if request["target_new"]["str"][0] != " ":
         # Space required for correct tokenization
         request["target_new"]["str"] = " " + request["target_new"]["str"]
+
+    if '{}' not in request['prompt']:
+        assert request['subject'] in request['prompt'] or \
+               print(f"Subject:{request['subject']} do not exist in prompt: {request['prompt']}")
+
+        request['prompt'] = request['prompt'].replace(request['subject'], '{}')
+
     print(
         f"Executing ROME algorithm for the update: "
-        f"[{request['prompt'].format(request['subject'])}] -> [{request['target_new']['str']}]"
+        f"[{request['prompt'].format(request['subject'])}] -> [{request['target_new']}]"
     )
 
     # Retrieve weights that user desires to change
@@ -96,79 +97,27 @@ def execute_rome(
 
     # Update loop: sequentially intervene at each specified layer
     deltas = {}
-    hparams.layers = sorted(hparams.layers)
-    for layer in hparams.layers:
-        left_vector, right_vector = None, None
-        require_recompute = True
-
-        # Retrieve k/v pair if already stored in cache
-        # Must be first layer, since rewrites at previous layers affect future layers
-        if layer == hparams.layers[0]:
-            cache_fname = (
-                Path(
-                    str(cache_template).format(
-                        layer, hparams.clamp_norm_factor, request["case_id"]
-                    )
-                )
-                if cache_template is not None
-                else None
-            )
-            if (
-                cache_fname is not None  # Require cache template
-                and cache_fname.exists()  # Cache file must exist
-            ):
-                try:
-                    data = np.load(cache_fname)
-                    left_vector = torch.from_numpy(data["left_vector"]).to("cuda")
-                    right_vector = torch.from_numpy(data["right_vector"]).to("cuda")
-                    require_recompute = False
-                except Exception as e:
-                    print(f"Error reading cache file due to {e}. Recomputing...")
-
+    for layer in sorted(hparams.layers):
         # Compute rank-1 update matrix
-        left_vector: torch.Tensor = (
-            left_vector
-            if left_vector is not None
-            else compute_u(
-                model,
-                tok,
-                request,
-                hparams,
-                layer,
-                get_context_templates(
-                    model, tok, hparams.context_template_length_params
-                ),
-            )
+        left_vector: torch.Tensor = compute_u(
+            model,
+            tok,
+            request,
+            hparams,
+            layer,
+            get_context_templates(model, tok, hparams.context_template_length_params),
         )
         print("Left vector shape:", left_vector.shape)
-        right_vector: torch.Tensor = (
-            right_vector
-            if right_vector is not None
-            else compute_v(
-                model,
-                tok,
-                request,
-                hparams,
-                layer,
-                left_vector,
-                get_context_templates(
-                    model, tok, hparams.context_template_length_params
-                ),
-            )
+        right_vector: torch.Tensor = compute_v(
+            model,
+            tok,
+            request,
+            hparams,
+            layer,
+            left_vector,
+            get_context_templates(model, tok, hparams.context_template_length_params),
         )
         print("Right vector shape:", right_vector.shape)
-
-        # Cache vectors for future use
-        if cache_fname is not None and require_recompute:
-            cache_fname.parent.mkdir(exist_ok=True, parents=True)
-            np.savez(
-                cache_fname,
-                **{
-                    "left_vector": left_vector.detach().cpu().numpy(),
-                    "right_vector": right_vector.detach().cpu().numpy(),
-                },
-            )
-            print(f"Cached k/v pair at {cache_fname}")
 
         with torch.no_grad():
             # Determine correct transposition of delta matrix
@@ -215,7 +164,7 @@ def get_context_templates(model, tok, length_params):
 
     if CONTEXT_TEMPLATES_CACHE is None:
         CONTEXT_TEMPLATES_CACHE = ["{}"] + [
-            x + ". {}"
+            x.replace("{", "").replace("}", "") + ". {}"
             for x in sum(
                 (
                     generate_fast(

@@ -7,14 +7,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from rome import repr_tools
 from util import nethook
 
-from .memit_hparams import MEMITHyperParams
+from .alphaedit_hparams import AlphaEditHyperParams
 
 
 def compute_z(
     model: AutoModelForCausalLM,
     tok: AutoTokenizer,
     request: Dict,
-    hparams: MEMITHyperParams,
+    hparams: AlphaEditHyperParams,
     layer: int,
     context_templates: List[str],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -25,7 +25,7 @@ def compute_z(
 
     # Get model parameters
     lm_w, ln_f = (
-        nethook.get_parameter(model, f"{hparams.lm_head_module}.weight").T,
+        nethook.get_module(model, f"{hparams.lm_head_module}").weight.T,
         nethook.get_module(model, hparams.ln_f_module),
     )
     try:
@@ -36,7 +36,7 @@ def compute_z(
     print("Computing right vector (v)")
 
     # Tokenize target into list of int token IDs
-    target_ids = tok.encode(request["target_new"]["str"], return_tensors="pt", add_special_tokens=False).to("cuda")[0]
+    target_ids = tok.encode(request["target_new"]['str'], return_tensors="pt", add_special_tokens=False).to(f"cuda:{hparams.device}")[0]
 
     if target_ids[0] == tok.bos_token_id or target_ids[0] == tok.unk_token_id:
         target_ids = target_ids[1:]
@@ -52,12 +52,13 @@ def compute_z(
         [prompt.format(request["subject"]) for prompt in all_prompts],
         return_tensors="pt",
         padding=True,
-    ).to("cuda")
+    ).to(f"cuda:{hparams.device}")
 
     # Compute rewriting targets
-    rewriting_targets = torch.tensor(-100, device="cuda").repeat(
+    rewriting_targets = torch.tensor(-100, device=f"cuda:{hparams.device}").repeat(
         len(rewriting_prompts), *input_tok["input_ids"].shape[1:]
     )
+
     for i in range(len(rewriting_prompts)):
         ex_len = input_tok["attention_mask"][i].sum()
         rewriting_targets[i, ex_len - len(target_ids) : ex_len] = target_ids
@@ -79,9 +80,9 @@ def compute_z(
     # rewrite layer, i.e. hypothesized fact lookup location, will induce the
     # target token to be predicted at the final layer.
     if hasattr(model.config, 'n_embd'):
-        delta = torch.zeros((model.config.n_embd,), requires_grad=True, device="cuda")
+        delta = torch.zeros((model.config.n_embd,), requires_grad=True, device=f"cuda:{hparams.device}")
     elif hasattr(model.config, 'hidden_size'):
-        delta = torch.zeros((model.config.hidden_size,), requires_grad=True, device="cuda")
+        delta = torch.zeros((model.config.hidden_size,), requires_grad=True, device=f"cuda:{hparams.device}")
     else:
         raise NotImplementedError
     target_init, kl_distr_init = None, None
@@ -127,6 +128,7 @@ def compute_z(
             edit_output=edit_output_fn,
         ) as tr:
             logits = model(**input_tok).logits
+
             # Compute distribution for KL divergence
             kl_logits = torch.stack(
                 [
@@ -140,7 +142,6 @@ def compute_z(
                 kl_distr_init = kl_log_probs.detach().clone()
 
         # Compute loss on rewriting targets
-
         output=tr[hparams.layer_module_tmp.format(loss_layer)].output[0]
         if output.shape[1]!=rewriting_targets.shape[1]:
             output=torch.transpose(output, 0, 1)
@@ -202,7 +203,6 @@ def get_module_input_output_at_words(
     words: List[str],
     module_template: str,
     fact_token_strategy: str,
-    track=None,
 ) -> Tuple[torch.Tensor]:
     """
     Retrieves detached representations for a word at the input and
@@ -221,12 +221,19 @@ def get_module_input_output_at_words(
             words=words,
         )
         subtoken = fact_token_strategy[len("subject_") :]
-        if track == 'out' or track == 'in':
-            return repr_tools.get_reprs_at_word_tokens(
-                track=track, subtoken=subtoken, **context_info, **word_repr_args
-            )
         l_input, l_output = repr_tools.get_reprs_at_word_tokens(
             track="both", subtoken=subtoken, **context_info, **word_repr_args
+        )
+    elif fact_token_strategy == "last":
+        raise Exception("This is definitely bugged, fix it.")
+        context_info = dict(
+            contexts=[
+                tmp[i].format(words[i]) for i, tmp in enumerate(context_templates)
+            ],
+            idxs=[000000],
+        )
+        l_input, l_output = repr_tools.get_reprs_at_idxs(
+            track="both", **context_info, **word_repr_args
         )
     else:
         raise ValueError(f"fact_token={fact_token_strategy} not recognized")

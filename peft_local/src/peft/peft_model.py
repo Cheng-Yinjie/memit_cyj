@@ -541,6 +541,7 @@ class PeftModelForCausalLM(PeftModel):
         **kwargs,
     ):
         if not isinstance(self.peft_config, PromptLearningConfig):
+            input_ids = input_ids.to("cuda")
             return self.base_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,

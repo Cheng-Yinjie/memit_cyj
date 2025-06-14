@@ -54,9 +54,13 @@ def compute_v(
         rewriting_targets[i, ex_len - len(target_ids) : ex_len] = target_ids
 
     # Compute indices of the tokens where the fact is looked up
+    vanilla_input_prompts = [
+        context.format(request["prompt"]).format(request['subject'])
+        for context in context_templates
+    ] + [f"{request['subject']} is a"]
     lookup_idxs = [
         find_fact_lookup_idx(
-            prompt, request["subject"], tok, hparams.fact_token, verbose=(i == 0)
+            prompt, request["subject"], tok, hparams.fact_token, verbose=(i == 0), input_prompt=vanilla_input_prompts[i]
         )
         for i, prompt in enumerate(all_prompts)
     ]
@@ -69,7 +73,10 @@ def compute_v(
     # Set up an optimization over a latent vector that, when output at the
     # rewrite layer, i.e. hypothesized fact lookup location, will induce the
     # target token to be predicted at the final layer.
-    delta = torch.zeros((model.config.n_embd,), requires_grad=True, device="cuda")
+    if hasattr(model.config, 'n_embd'):
+        delta = torch.zeros((model.config.n_embd,), requires_grad=True, device="cuda")
+    else:
+        delta = torch.zeros((model.config.hidden_size,), requires_grad=True, device="cuda")
     target_init, kl_distr_init = None, None
 
     # Inserts new "delta" variable at the appropriate part of the computation
@@ -82,9 +89,12 @@ def compute_v(
                 print("Recording initial value of v*")
                 # Initial value is recorded for the clean sentence
                 target_init = cur_out[0, lookup_idxs[0]].detach().clone()
-
+                
             for i, idx in enumerate(lookup_idxs):
-                cur_out[i, idx, :] += delta
+                if len(lookup_idxs)!=len(cur_out):
+                    cur_out[idx, i, :] += delta
+                else:
+                    cur_out[i, idx, :] += delta
 
         return cur_out
 
@@ -163,7 +173,7 @@ def compute_v(
             with torch.no_grad():
                 delta[...] = delta * max_norm / delta.norm()
 
-    target = target_init + delta
+    target = target_init + delta.to(target_init.dtype)
 
     # Retrieve cur_input, the current input to the 2nd MLP layer, and
     # cur_output, the original output of the 2nd MLP layer.
@@ -238,6 +248,7 @@ def find_fact_lookup_idx(
     tok: AutoTokenizer,
     fact_token_strategy: str,
     verbose=True,
+    input_prompt=None
 ) -> int:
     """
     Computes hypothesized fact lookup index given a sentence and subject.
@@ -245,7 +256,7 @@ def find_fact_lookup_idx(
 
     ret = None
     if fact_token_strategy == "last":
-        ret = -1
+        ret = len(tok.encode(input_prompt)) - 1
     elif (
         "subject_" in fact_token_strategy and fact_token_strategy.index("subject_") == 0
     ):

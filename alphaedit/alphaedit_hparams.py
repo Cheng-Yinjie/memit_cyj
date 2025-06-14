@@ -6,7 +6,7 @@ from util.hparams import HyperParams
 
 
 @dataclass
-class MEMITHyperParams(HyperParams):
+class AlphaEditHyperParams(HyperParams):
     # Method
     layers: List[int]
     layer_selection: Literal["all", "random"]
@@ -34,10 +34,13 @@ class MEMITHyperParams(HyperParams):
     mom2_dataset: str
     mom2_n_samples: int
     mom2_dtype: str
+    nullspace_threshold: float
+    L2: float
     alg_name: str
     device: int
     model_name: str
     stats_dir: str
+    P_loc: str
 
     max_length: int = 40
     batch_size: int = 1
@@ -53,6 +56,6 @@ class MEMITHyperParams(HyperParams):
             config = yaml.safe_load(stream)
             config = super().construct_float_from_scientific_notation(config)
 
-        assert (config and config['alg_name'] == 'MEMIT') or print(f'MEMITHyperParams can not load from {hparams_name_or_path}, '
+        assert (config and config['alg_name'] == 'AlphaEdit') or print(f'AlphaEditHyperParams can not load from {hparams_name_or_path}, '
                                                 f'alg_name is {config["alg_name"]} ')
         return cls(**config)

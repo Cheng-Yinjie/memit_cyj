@@ -1,47 +1,10 @@
-import os
 import unicodedata
-from datetime import date, datetime
-from random import random
-from typing import List, Optional, Dict
+from typing import List, Optional
 
-import pandas as pd
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from util.logit_lens import LogitLens
-
-
-class RecordTimer:
-    def __init__(self, model_type: str, folder: str, file_prefix: str):
-        self.model_type = model_type
-        self.folder = folder
-        self.file_prefix = file_prefix
-        self.duplicated_flag = True
-        self.index = int(random() * 100000)
-        os.makedirs(self.folder, exist_ok=True)
-    
-    def current_time(self, strft_format: str):
-        return datetime.now().strftime(strft_format)
-    
-    def check_output_params(self):
-        file_path = self.build_full_path()
-        while self.duplicated_flag:
-            if os.path.exists(file_path):
-                self.index += 1
-                file_path = self.build_full_path()
-            else:
-                self.duplicated_flag = False
-        return file_path
-    
-    def build_full_path(self):
-        file_name = f"{self.file_prefix}_{self.model_type}_{self.current_time('%Y%m%d')}_{self.index}.txt"
-        return os.path.join(self.folder, file_name)
-
-    def record(self, content: str):
-        file_path = self.check_output_params()
-        content = f"{content} - {self.current_time('%Y-%m-%d %H:%M:%S')} - {self.index}\n"
-        with open(file_path, "a") as file:
-            file.write(content)
 
 
 def generate_interactive(
@@ -118,6 +81,7 @@ def generate_fast(
     n_gen_per_prompt: int = 1,
     top_k: int = 5,
     max_out_len: int = 200,
+    vanilla_generation=False,
 ):
     """
     Fast, parallelized auto-regressive text generation with top-k sampling.
@@ -130,6 +94,20 @@ def generate_fast(
         next(model.parameters()).device
     )
     input_ids, attention_mask = inp_tok["input_ids"], inp_tok["attention_mask"]
+    if vanilla_generation:
+        gen_txt = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_out_len
+        )
+        txt = [tok.decode(x, skip_special_tokens=True) for x in gen_txt.detach().cpu().numpy().tolist()]
+        txt = [
+            unicodedata.normalize("NFKD", x)
+            .replace("\n\n", " ")
+            .replace("<|endoftext|>", "")
+            for x in txt
+        ]
+        return txt
     batch_size = input_ids.size(0)
 
     # Setup storage of fast generation with attention caches.
@@ -142,11 +120,15 @@ def generate_fast(
         while input_ids.size(1) < max_out_len:  # while not exceeding max output length
             model_out = model(
                 input_ids=input_ids[:, cur_context],
-                attention_mask=attention_mask[:, cur_context],
+                attention_mask=None if 'llama' in model.name_or_path.lower() or 'baichuan' in model.name_or_path.lower() or 'internlm' in model.name_or_path.lower() else attention_mask[:, cur_context],
                 past_key_values=past_key_values,
                 use_cache=True,
             )
-            logits, past_key_values = model_out.logits, model_out.past_key_values
+            if type(model_out) is torch.Tensor:
+                logits = model_out
+            else:
+                logits = model_out.logits
+            past_key_values = model_out.past_key_values
             softmax_out = torch.nn.functional.softmax(logits[:, -1, :], dim=1)
 
             # Top-k sampling
@@ -182,8 +164,7 @@ def generate_fast(
                     attention_mask[i][new_idx] = 1
 
             cur_context = slice(cur_context.stop, cur_context.stop + 1)
-
-    txt = [tok.decode(x) for x in input_ids.detach().cpu().numpy().tolist()]
+    txt = [tok.decode(x, skip_special_tokens=True) for x in input_ids.detach().cpu().numpy().tolist()]
     txt = [
         unicodedata.normalize("NFKD", x)
         .replace("\n\n", " ")

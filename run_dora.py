@@ -1,4 +1,5 @@
 import sys
+import os
 from typing import List
 
 import fire
@@ -12,16 +13,14 @@ from peft_local.src.peft import (
     prepare_model_for_int8_training, 
     get_peft_model, 
     get_peft_model_state_dict)
-from util.generate import RecordTimer
 from util.edit_inherit import Prompt4Lora, model_load
 
 
 def run_finetune(
     model_folder_path: str, 
     model_name: str, 
-    data_path: str = "zwhe99/commonsense_170k",
+    data_path: str = "commonsense_170k.json",
     adapter_name: str = "lora",
-    adapter_path: str = " ",
     output_dir: str = "./lora-alpaca",
     # training parameters
     batch_size: int = 128,
@@ -44,6 +43,7 @@ def run_finetune(
     Wdecompose_target_modules: List[str] = None,
     # llm parameters
     train_on_inputs: bool = True,
+    resume_from_checkpoint: str = None
     ):
     # Set up model and tokenizer
     model, tokenizer = model_load(model_folder_path, model_name)
@@ -54,11 +54,9 @@ def run_finetune(
 
     # Initiate params
     gradient_accumulation_steps = batch_size // micro_batch_size
-    rt_model_type = adapter_path if adapter_path else model_folder_path
-    rt = RecordTimer(rt_model_type, "time_records", f"time_{adapter_name}")
     prompt_cfg = Prompt4Lora(tokenizer, cutoff_len, model_name, train_on_inputs)
 
-    if adapter_name == "lora":
+    if adapter_name.lower() == "lora":
         config = LoraConfig(
                 r=lora_r,
                 lora_alpha=lora_alpha,
@@ -80,19 +78,19 @@ def run_finetune(
             )
 
     model = get_peft_model(model, config)
-    data = load_dataset(data_path)
+    data = load_dataset("json", data_files=os.path.join(os.getcwd(), data_path))
     model.print_trainable_parameters()
 
     if val_set_size > 0:
-            train_val = data["train"].train_test_split(
-                test_size=val_set_size, shuffle=True, seed=42
-            )
-            train_data = (
-                train_val["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
-            )
-            val_data = (
-                train_val["test"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
-            )
+        train_val = data["train"].train_test_split(
+            test_size=val_set_size, shuffle=True, seed=42
+        )
+        train_data = (
+            train_val["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
+        )
+        val_data = (
+            train_val["test"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
+        )
     else:
         train_data = data["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
         val_data = None
@@ -119,7 +117,7 @@ def run_finetune(
             save_total_limit=3,
             load_best_model_at_end=True if val_set_size > 0 else False,
             ddp_find_unused_parameters=None,
-            report_to=None
+            report_to=None,
         ),
         data_collator=transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
@@ -137,13 +135,10 @@ def run_finetune(
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
 
-    rt.record("model start dora fine-tuning")
-    trainer.train()
-    rt.record("model finished dora fine-tuning")
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     model.save_pretrained(output_dir)
-    rt.record("model saved")
-    print(f"time recorded to: {rt.build_full_path()}")
 
 
 if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     fire.Fire(run_finetune)

@@ -1,7 +1,8 @@
 {
-    "alg_name": "MEMIT",
+    "alg_name": "AlphaEdit",
     "model_name": "gpt2-xl",
     "stats_dir": "./data/stats",
+    "P_loc": "./null_space_project.pt",
     "device": 0,
     "layers": [13, 14, 15, 16, 17],
     "clamp_norm_factor": 0.75,
@@ -19,8 +20,10 @@
     "mlp_module_tmp": "transformer.h.{}.mlp",
     "attn_module_tmp": "transformer.h.{}.attn",
     "ln_f_module": "transformer.ln_f",
-    "lm_head_module": "transformer.wte",
+    "lm_head_module": "lm_head",
     "mom2_dataset": "wikipedia",
     "mom2_n_samples": 100000,
-    "mom2_dtype": "float32"
+    "mom2_dtype": "float32",
+    "nullspace_threshold": 2e-2,
+    "L2": 10
 }

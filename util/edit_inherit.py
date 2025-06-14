@@ -1,16 +1,18 @@
 import ast
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from os import walk
 from os.path import join
 from typing import List, Dict
 
-from datasets import load_dataset
 import pandas as pd
-from safetensors.torch import load_file
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer
+import torch
+from datasets import load_dataset
+from peft_local import PeftModel as PeftModel_Local
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class Prompt4Lora():
@@ -24,14 +26,14 @@ class Prompt4Lora():
         result = self.tokenizer(
             prompt,
             truncation=True,
-            max_length=self.cutoff_len, 
+            max_length=self.cutoff_len,
             padding=False,
             return_tensors=None,
         )
         if (
-            result["input_ids"][-1] != self.tokenizer.eos_token_id
-            and len(result["input_ids"]) < self.cutoff_len
-            and add_eos_token
+                result["input_ids"][-1] != self.tokenizer.eos_token_id
+                and len(result["input_ids"]) < self.cutoff_len
+                and add_eos_token
         ):
             result["input_ids"].append(self.tokenizer.eos_token_id)
             if "chatglm" not in self.model_name:
@@ -65,7 +67,7 @@ class Prompt4Lora():
                     
                     ### Response:
                     {data_point["output"]}"""
-        
+    
     def generate_and_tokenize_prompt(self, data_point):
         full_prompt = self.generate_prompt(data_point)
         tokenized_full_prompt = self.tokenize(full_prompt)
@@ -73,51 +75,72 @@ class Prompt4Lora():
             user_prompt = self.generate_prompt({**data_point, "output": ""})
             tokenized_user_prompt = self.tokenize(user_prompt, add_eos_token=False)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
-            tokenized_full_prompt["labels"] = [-100] * user_prompt_len + tokenized_full_prompt["labels"][user_prompt_len:]
+
+            tokenized_full_prompt["labels"] = [
+                                                  -100
+                                              ] * user_prompt_len + tokenized_full_prompt["labels"][
+                                                                    user_prompt_len:
+                                                                    ]  # could be sped up, probably
         return tokenized_full_prompt
     
 
-def model_load(model_path: str, model_name: str, adapter_path: str = ''): 
-    def get_whole_model_dict(dir: str) -> Dict:
-        def list_safetensors_files(dir: str) -> List:
-            safetensors_files = list()
-            for _, _, files in walk(dir):
-                for file in files:
-                    if file.endswith('.safetensors'):
-                        safetensors_files.append(file)
-            return safetensors_files
+def model_load(model_path: str, model_name: str = " ", adapter_path: str = " ", adapter_name: str = " "): 
+    def keyword_detector(keyword, folder_path):
+        if (not folder_path) or (not os.path.exists(folder_path)): 
+            return False
+        for filename in os.listdir(folder_path):
+            if keyword.lower() in filename.lower():  # case-insensitive match
+                return True
+        return False
+    
+    def parse_args():
+        final_model_path, final_tokenizer_path = model_name, model_name
+        load_adapter_flag = False
+        if model_path and os.path.exists(model_path):
+            final_model_path = model_path
+            if keyword_detector("tokenizer.json", model_path):
+                final_tokenizer_path = model_path
+                load_adapter_flag = False
+        if adapter_path and adapter_name:
+            if os.path.exists(adapter_path) and adapter_name.lower() in ["dora", "lora"]:
+                load_adapter_flag = True
+        return final_model_path, final_tokenizer_path, load_adapter_flag
 
-        sub_dict_lst = list_safetensors_files(dir)
-        combined_dict = dict()
-        for file_path in sub_dict_lst:
-            state_dict = load_file(join(dir, file_path))
-            for key, value in state_dict.items():
-                combined_dict[key] = value
-        return combined_dict
+    # Load model and tokenizer
+    model_path_fnl, token_path_fnl, adapter_flag = parse_args()
+    model = AutoModelForCausalLM.from_pretrained(model_path_fnl, torch_dtype=torch.float32, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(token_path_fnl, trust_remote_code=True)
 
-    # Load model
-    if any(".safetensors" in str(item) for item in os.listdir(model_path)):
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-        model.load_state_dict(get_whole_model_dict(model_path), strict=False)
-    elif any(".bin" in str(item) for item in os.listdir(model_path)):
-        model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
-    # load adapter if adapter_path is specified
-    elif adapter_path:
-        model = AutoModelForCausalLM.from_pretrained(adapter_path)
-        model.load_adapter(adapter_path)
-        model.set_active_adapters("default")
+    # Load adapter if adapter is DoRA and adapter_path is specified
+    if adapter_flag:
+        model = PeftModel_Local.from_pretrained(
+            model, 
+            adapter_path,
+            torch_dtype=torch.float32)
+        key_list = [(key, module) for key, module in model.model.named_modules()]
+        for key, module in key_list:
+            if isinstance(model.peft_config.target_modules, str):
+                target_module_found = re.fullmatch(model.peft_config.target_modules, key)
+            else:
+                target_module_found = any(key.endswith(target_key) for target_key in model.peft_config.target_modules)
 
-    # Load tokenizer
-    if "llama" in model_name.lower():
-        tokenizer = LlamaTokenizer.from_pretrained(
-            model_name, 
-            trust_remote_code=True,
-            legacy=False,
-            use_auth_token=True)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.pad_token_id = (0)
-    tokenizer.padding_side = "left"
+            if adapter_name == "dora":
+                if model.peft_config.Wdecompose_target_modules != None:
+                    if isinstance(model.peft_config.Wdecompose_target_modules, str):
+                        wdecompose_target_module_found = re.fullmatch(model.peft_config.Wdecompose_target_modules, key)
+                    else:
+                        wdecompose_target_module_found = any(key.endswith(target_key) for target_key in model.peft_config.Wdecompose_target_modules)
+                else: 
+                    wdecompose_target_module_found = False
+            else:
+                wdecompose_target_module_found = False
+
+            if target_module_found:
+                module.merge_weights = True
+                module.train(mode=False)
+            elif wdecompose_target_module_found:
+                module.merge_weights = True
+                module.train(mode=False)
     return model, tokenizer
     
 
