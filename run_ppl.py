@@ -1,17 +1,24 @@
+import datetime
 import fire
+
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from util.edit_inherit import model_load, generate_date_string
+from util.edit_inherit import model_load
+
+
+def generate_date_string(date_format: str = "%y%m%d"):
+    now = datetime.now()
+    return now.strftime(date_format)
 
 
 def run_ppl_calculation(model_name: str, model_path: str, adapter_name: str, adapter_path: str = None):
     # Model name and model_folder will be loaded everytime but not adapter_path
 
     def tokenize_function(example):
-        encoded =  tokenizer(
+        encoded = tokenizer(
             example["text"],
             padding=True,
             truncation=True, 

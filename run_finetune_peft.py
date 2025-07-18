@@ -1,3 +1,4 @@
+import gc
 import sys
 import os
 from typing import List
@@ -7,21 +8,21 @@ import torch
 import transformers
 from datasets import load_dataset
 
+
 from peft_local.src.peft import (
-    LoraConfig, 
-    DoraConfig, 
-    prepare_model_for_int8_training, 
-    get_peft_model, 
+    LoraConfig,
+    DoraConfig,
+    prepare_model_for_int8_training,
+    get_peft_model,
     get_peft_model_state_dict)
 from util.edit_inherit import Prompt4Lora, model_load
 
 
 def run_finetune(
-    model_folder_path: str, 
-    model_name: str, 
+    model_folder_path: str,
+    model_name: str,
     data_path: str = "commonsense_170k.json",
     adapter_name: str = "lora",
-    output_dir: str = "./lora-alpaca",
     # training parameters
     batch_size: int = 128,
     micro_batch_size: int = 4,
@@ -55,6 +56,7 @@ def run_finetune(
     # Initiate params
     gradient_accumulation_steps = batch_size // micro_batch_size
     prompt_cfg = Prompt4Lora(tokenizer, cutoff_len, model_name, train_on_inputs)
+    output_dir = f"{model_folder_path}_{adapter_name}"
 
     if adapter_name.lower() == "lora":
         config = LoraConfig(
@@ -91,6 +93,7 @@ def run_finetune(
         val_data = (
             train_val["test"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
         )
+        del train_val
     else:
         train_data = data["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
         val_data = None
@@ -132,13 +135,12 @@ def run_finetune(
         )
     ).__get__(model, type(model))
 
-    if torch.__version__ >= "2" and sys.platform != "win32":
-        model = torch.compile(model)
-
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     model.save_pretrained(output_dir)
 
 
 if __name__ == "__main__":
+    gc.collect()
+    torch.cuda.empty_cache()
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     fire.Fire(run_finetune)

@@ -132,22 +132,40 @@ MODEL_SAVE=1
 ```
 
 ### **Example 2. Model Finetuning**
-`run_dora.py` and `run_dora.sh` are scripts we need, it finetunes the model in LoRA or DoRA. The outputs are evaluation of finetuning adapter. Input the following commands in the terminal to run editing:
+We use `run_finetune.sh` as the entrance script to launch a fine-tuning, it fine-tunes the model in LoRA, DoRA or Full-size fine-tuning. LoRA / Dora are PEFT (Parameter-Efficient Fine-Tuning) and they are employed by calling `run_finetune_peft.py`. Full-size fine-tuning are employed by calling `run_finetune_fullsize.sh`.
+
+Input the following commands in the terminal to run editing, the outputs are adapters in the form of `bin` files:
 ```bash
 # Submit to HPC
-sbatch run_dora.sh
+sbatch run_finetune.sh
 # Run with nodes or local devices
-bash run_dora.sh
+bash run_finetune.sh
 ```
 Below code block demonstrates the parameters for model editing, `MODEL_NAME`, `MODEL_PATH`, `ADAPTER_NAME` and `ADAPTER_PATH` are input parameters for function model_load introduced in [Load model with adapters](#12-load-model-with-adapters). The rest parameters are used for finetuning config, users can refer to [DoRA github](https://github.com/NVlabs/DoRA/blob/main/commonsense_reasoning/README.md). Below is an example of dora scipt parameters:
 ```bash
+# Dora llama2-7b
 python run_dora.py \
-    --model_folder_path "Llama-2-7b-hf-MEMIT_zsre_100" --model_name 'meta-llama/Llama-2-7b-hf' \
-    --data_path 'commonsense_170k.json' --adapter_name 'dora' --output_dir 'Llama-2-7b-hf-MEMIT_zsre_100_dora' \
+    --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
+    --data_path 'commonsense_170k.json' --adapter_name 'dora' \
     --batch_size 16  --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
     --use_gradient_checkpointing True --val_set_size 120 --eval_step 80 --save_step 80 \
     --cutoff_len 256 --lora_r 32 --lora_alpha 64 --lora_dropout 0.05 --dora_simple True \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
+
+# Lora llama2-7b
+python run_dora.py \
+    --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
+    --data_path 'commonsense_170k.json' --adapter_name 'lora' \
+    --batch_size 16 --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
+    --use_gradient_checkpointing True --val_set_size 120 --eval_step 80 --save_step 80 \
+    --cutoff_len 256 --lora_r 32 --lora_alpha 64 --lora_dropout 0.05 --dora_simple True \
+    --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
+
+# Full-size finetune llama2-7b
+python run_finetune_fullsize.py \
+    --model_folder_path "Llama-2-7b-hf-MEMIT_zsre_1000" --model_name 'meta-llama/Llama-2-7b-hf' \
+    --data_path 'commonsense_170k.json' --batch_size 16 --micro_batch_size 16 --num_epochs 3 \
+    --save_step 80 --eval_step 80 --val_set_size 120 --cutoff_len 256
 ```
 
 ### **Example 3. Downstream Tasks Evaluation**
@@ -165,7 +183,6 @@ MODEL_NAME="meta-llama/Llama-2-7b-hf"
 ADAPTER_NAME="LoRA"
 MODEL_PATH="meta-llama_Llama-2-7b-hf"
 ADAPTER_PATH="meta-llama_Llama-2-7b-hf_lora"
-SAVE_FOLDER_PATH="Llama2_unedited-dora_run-downstream_results"
 ```
 
 ### **Example 4. Perplexity Index**

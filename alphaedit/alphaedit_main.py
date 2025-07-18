@@ -23,18 +23,19 @@ COV_CACHE = {}
 P_loaded = False
 cache_c_new = False
 
+
 def apply_AlphaEdit_to_model(
-    model: AutoModelForCausalLM,
-    tok: AutoTokenizer,
-    requests: List[Dict],
-    hparams: AlphaEditHyperParams,
-    copy=False,
-    return_orig_weights=False,
-    cache_template: Optional[str] = None,
-    keep_original_weight=False,
-    **kwargs
+        model: AutoModelForCausalLM,
+        tok: AutoTokenizer,
+        requests: List[Dict],
+        hparams: AlphaEditHyperParams,
+        copy=False,
+        return_orig_weights=False,
+        cache_template: Optional[str] = None,
+        keep_original_weight=False,
+        **kwargs
 ) -> Dict[str, Tuple[torch.Tensor]]:
-  #-> Tuple[AutoModelForCausalLM, Dict[str, Any]]:
+    # -> Tuple[AutoModelForCausalLM, Dict[str, Any]]:
     """
     Returns a model with the desired changes.
     :param copy: If true, will preserve the original model while creating a new one to edit.
@@ -47,24 +48,22 @@ def apply_AlphaEdit_to_model(
     weights_copy = {}
     if copy:
         model = deepcopy(model)
-    
+
     # Calculate the null-space projection matrix P
-    # Please ensure that you have downloaded "null_space_project.pt" to the easyedit folder beforehand, or get the P by following calculation
-    if not os.path.exists(hparams.P_loc):
-        print(f"The null-space projection matrix P does not exist and now calculate.")
-        W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
-        if "llama" in hparams.model_name.lower() or "gpt-j-6b" in hparams.model_name.lower():
-            P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
-        elif "gpt2-xl" in hparams.model_name.lower():
-            P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
-        del W_out
-        for i, layer in enumerate(hparams.layers):
-            P[i,:,:] = get_project(model, tok, layer, hparams)
-        torch.save(P, "null_space_project.pt")
-        P_loaded = True
-    elif P_loaded == False:
-        P = torch.load(hparams.P_loc)
-        P_loaded = True
+    # After switching models, the old P will raise error when editing, thus set P to be calculated locally everytime
+    if os.path.exists(hparams.P_loc):
+        os.remove(hparams.P_loc)
+    print(f"The null-space projection matrix P does not exist and now calculate.")
+    W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
+    if "llama" in hparams.model_name.lower() or "gpt-j-6b" in hparams.model_name.lower():
+        P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
+    elif "gpt2-xl" in hparams.model_name.lower():
+        P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
+    del W_out
+    for i, layer in enumerate(hparams.layers):
+        P[i, :, :] = get_project(model, tok, layer, hparams)
+    torch.save(P, "null_space_project.pt")
+    P_loaded = True
 
     # Maintain the global variable cache_c to avoid redundant computations.
     # If this is the first calculation (i.e., cache_c_new == false), then initialize cache_c first
@@ -76,7 +75,7 @@ def apply_AlphaEdit_to_model(
             cache_c = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
         del W_out
         cache_c_new = True
-    
+
     deltas = execute_AlphaEdit(model, tok, requests, hparams, cache_template=cache_template)
 
     with torch.no_grad():
@@ -95,11 +94,11 @@ def apply_AlphaEdit_to_model(
 
 
 def execute_AlphaEdit(
-    model: AutoModelForCausalLM,
-    tok: AutoTokenizer,
-    requests: List[Dict],
-    hparams: AlphaEditHyperParams,
-    cache_template: Optional[str] = None,
+        model: AutoModelForCausalLM,
+        tok: AutoTokenizer,
+        requests: List[Dict],
+        hparams: AlphaEditHyperParams,
+        cache_template: Optional[str] = None,
 ) -> Dict[str, Tuple[torch.Tensor]]:
     """
     Executes the AlphaEdit update algorithm for the specified update at the specified layer
@@ -152,8 +151,8 @@ def execute_AlphaEdit(
         )
         data_loaded = False
         if (
-            cache_fname is not None  # Require cache template
-            and cache_fname.exists()  # Cache file must exist
+                cache_fname is not None  # Require cache template
+                and cache_fname.exists()  # Cache file must exist
         ):
             try:
                 data = np.load(cache_fname)
@@ -210,9 +209,16 @@ def execute_AlphaEdit(
         repeat_factor = (layer_ks.size(1) // targets.size(1))
         targets = targets.repeat_interleave(repeat_factor, dim=1)
         resid = targets / (len(hparams.layers) - i)  # Distribute residual across layers
+        layer_ks = layer_ks.to(torch.float32)
+        resid = resid.to(torch.float32)
         upd_matrix = torch.linalg.solve(
-                P[i,:,:].to(f"cuda:{hparams.device}") @ (layer_ks.to(f"cuda:{hparams.device}") @ layer_ks.T.to(f"cuda:{hparams.device}") + cache_c[i,:,:].to(f"cuda:{hparams.device}")) + hparams.L2*torch.eye(layer_ks.shape[0], dtype=torch.float,device=f"cuda:{hparams.device}"),
-                P[i,:,:].to(f"cuda:{hparams.device}") @ layer_ks.to(f"cuda:{hparams.device}") @ resid.T.to(f"cuda:{hparams.device}")
+            P[i, :, :].to(f"cuda:{hparams.device}") @ (
+                        layer_ks.to(f"cuda:{hparams.device}") @ layer_ks.T.to(f"cuda:{hparams.device}") + cache_c[i, :,
+                                                                                                          :].to(
+                    f"cuda:{hparams.device}")) + hparams.L2 * torch.eye(layer_ks.shape[0], dtype=torch.float,
+                                                                        device=f"cuda:{hparams.device}"),
+            P[i, :, :].to(f"cuda:{hparams.device}") @ layer_ks.to(f"cuda:{hparams.device}") @ resid.T.to(
+                f"cuda:{hparams.device}")
         )
 
         # Adjust update matrix shape
@@ -228,38 +234,38 @@ def execute_AlphaEdit(
             deltas[weight_name] = (
                 upd_matrix.detach().cpu()
             )
-        
+
         # Clear GPU memory
-        #del U,S,cov
+        # del U,S,cov
         for x in [layer_ks, cur_zs, targets]:
             x.cpu()
             del x
         torch.cuda.empty_cache()
-    
+
     for i, layer in enumerate(hparams.layers):
         layer_ks = compute_ks(model, tok, requests, hparams, layer, context_templates).T
-        cache_c[i,:,:] += layer_ks.cpu() @ layer_ks.cpu().T
+        cache_c[i, :, :] += layer_ks.cpu() @ layer_ks.cpu().T
 
     # Restore state of original model
     with torch.no_grad():
         for k, v in weights.items():
             v[...] = weights_copy[k]
-    
+
     print(f"Deltas successfully computed for {list(weights.keys())}")
 
     return deltas
 
 
 def get_cov(
-    model: AutoModelForCausalLM,
-    tok: AutoTokenizer,
-    layer_name: str,
-    mom2_dataset: str,
-    mom2_n_samples: str,
-    mom2_dtype: str,
-    inv: bool = False,
-    force_recompute: bool = False,
-    hparams=None,
+        model: AutoModelForCausalLM,
+        tok: AutoTokenizer,
+        layer_name: str,
+        mom2_dataset: str,
+        mom2_n_samples: str,
+        mom2_dtype: str,
+        inv: bool = False,
+        force_recompute: bool = False,
+        hparams=None,
 ) -> torch.Tensor:
     """
     Retrieves covariance statistics, then computes the algebraic inverse.
@@ -286,7 +292,8 @@ def get_cov(
         COV_CACHE[key] = stat.mom2.moment().float().to("cpu")
 
     return (
-        torch.inverse(COV_CACHE[key].to(f"cuda:{hparams.device}")) if inv else COV_CACHE[key].to(f"cuda:{hparams.device}")
+        torch.inverse(COV_CACHE[key].to(f"cuda:{hparams.device}")) if inv else COV_CACHE[key].to(
+            f"cuda:{hparams.device}")
     )
 
 
@@ -315,18 +322,19 @@ def get_context_templates(model, tok):
             [
                 f.replace("{", " ").replace("}", " ") + ". {}"
                 for f in generate_fast(
-                    model,
-                    tok,
-                    ["The", "Therefore", "Because", "I", "You"],
-                    n_gen_per_prompt=n_gen // 5,
-                    max_out_len=length,
-                )
+                model,
+                tok,
+                ["The", "Therefore", "Because", "I", "You"],
+                n_gen_per_prompt=n_gen // 5,
+                max_out_len=length,
+            )
             ]
             for length, n_gen in [(10, 5)]  # Be careful about changing this.
         ]
         print(f"Cached context templates {CONTEXT_TEMPLATES_CACHE}")
 
     return CONTEXT_TEMPLATES_CACHE
+
 
 def get_project(model, tok, layer, hparams):
     force_recompute = False

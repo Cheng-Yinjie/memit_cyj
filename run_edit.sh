@@ -10,7 +10,7 @@ DS_NAME="zsre" # [cf, mcf, zsre]
 
 # Edit parameters
 N_EDITS="10000"
-ALG_NAMES=("MEMIT")
+ALG_NAMES=("MEMIT") # [AlphaEdit, MEMIT, ROME]
 HPARAMS_FNAMES=("gpt2-xl.json") # meta-llama_Llama-2-7b-hf.json
 EVAL_ONLY=1
 MODEL_SAVE=0
@@ -31,4 +31,3 @@ do
         --model_save=$MODEL_SAVE
 done
 exit 0
- 

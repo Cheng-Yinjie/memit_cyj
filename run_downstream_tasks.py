@@ -70,7 +70,8 @@ def main():
         return outputs
 
     model_name = args.model_name.split("/")[-1]
-    save_file = f'{args.save_folder_path}/{model_name}-{args.adapter_name}-{args.dataset}.json'
+    save_folder_path = f"{args.model_path}_downstream_results"
+    save_file = f'{save_folder_path}/{model_name}-{args.adapter_name}-{args.dataset}.json'
     create_dir(f'{args.save_folder_path}/')
 
     dataset = load_data(args)
@@ -82,7 +83,7 @@ def main():
     model = model.to(device)
     tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.pad_token_id = (0)  
+    tokenizer.pad_token_id = (0)
 
     total = len(batches)
     correct = 0
@@ -97,7 +98,7 @@ def main():
 
         for data, output in zip(batch, outputs):
             label = data.get('answer')
-            flag = False  
+            flag = False
             predict = extract_answer(args, output)
             if label == predict:
                 correct += 1
@@ -169,8 +170,8 @@ def create_batch(dataset, batch_size):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', 
-                        choices=["boolq", "piqa", "social_i_qa", 
+    parser.add_argument('--dataset',
+                        choices=["boolq", "piqa", "social_i_qa",
                                  "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"],
                         required=True)
     parser.add_argument('--model_name', required=True)
@@ -178,7 +179,6 @@ def parse_args():
     parser.add_argument('--model_path')
     parser.add_argument('--adapter_path')
     parser.add_argument('--batch_size', type=int, required=True)
-    parser.add_argument('--save_folder_path', type=str, required=True)
     return parser.parse_args()
 
 
