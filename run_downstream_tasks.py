@@ -72,7 +72,7 @@ def main():
     model_name = args.model_name.split("/")[-1]
     save_folder_path = f"{args.model_path}_downstream_results"
     save_file = f'{save_folder_path}/{model_name}-{args.adapter_name}-{args.dataset}.json'
-    create_dir(f'{args.save_folder_path}/')
+    create_dir(f'{save_folder_path}/')
 
     dataset = load_data(args)
     batches = create_batch(dataset, args.batch_size)
