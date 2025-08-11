@@ -15,6 +15,7 @@ from experiments.py.eval_utils_zsre import compute_rewrite_quality_zsre
 from memit import MEMITHyperParams, apply_memit_to_model
 from rome import ROMEHyperParams, apply_rome_to_model
 from alphaedit import AlphaEditHyperParams, apply_AlphaEdit_to_model
+
 from util.edit_inherit import model_load
 from util.globals import *
 
@@ -54,7 +55,7 @@ def main(
     # Set algorithm-specific variables
     params_class, apply_algo = ALG_DICT[alg_name]
 
-    # ROME edits one concept each time, it does not make sense to use saved model 
+    # ROME edits one concept each time, it does not make sense to use saved model
     # as model saved from ROME is edited once.
     if alg_name == "ROME" and eval_only == 1:
         eval_only = 0
@@ -137,7 +138,7 @@ def main(
             if conserve_memory
             else dict()
         )
-        etc_args = dict(cache_template=cache_template) if any(alg in alg_name for alg in ["ROME", "MEMIT"]) else dict()
+        etc_args = dict(cache_template=cache_template) if any(alg in alg_name for alg in ["ROME", "MEMIT", "AlphaEdit"]) else dict()
 
         start = time()
         if eval_only:

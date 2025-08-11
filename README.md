@@ -163,9 +163,9 @@ python run_dora.py \
 
 # Full-size finetune llama2-7b
 python run_finetune_fullsize.py \
-    --model_folder_path "Llama-2-7b-hf-MEMIT_zsre_1000" --model_name 'meta-llama/Llama-2-7b-hf' \
-    --data_path 'commonsense_170k.json' --batch_size 16 --micro_batch_size 16 --num_epochs 3 \
-    --save_step 80 --eval_step 80 --val_set_size 120 --cutoff_len 256
+    --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_1000" --model_name 'meta-llama/Llama-2-7b-hf' \
+    --data_path 'commonsense_170k.json' --learning_rate 5e-6 --batch_size 1 --num_epochs 3 \
+    --save_step 5000 --log_step 20  --cutoff_len 1024
 ```
 
 ### **Example 3. Downstream Tasks Evaluation**

@@ -39,6 +39,7 @@ def get_reprs_at_word_tokens(
         track,
     )
 
+
 def get_words_idxs_in_templates(
     tok: AutoTokenizer, context_templates: str, words: str, subtoken: str
 ) -> int:
@@ -51,7 +52,6 @@ def get_words_idxs_in_templates(
     assert all(
         tmp.count("{}") == 1 for tmp in context_templates
     ), "We currently do not support multiple fill-ins for context"
-
 
     prefixes_len, words_len, suffixes_len, inputs_len = [], [], [], []
     for i, context in enumerate(context_templates):

@@ -13,7 +13,7 @@ from util.generate import generate_fast
 from util.globals import *
 
 from .compute_ks import compute_ks
-from .compute_z import compute_z, get_module_input_output_at_words, find_fact_lookup_idx
+from .compute_z import compute_z, get_module_input_output_at_words
 from .alphaedit_hparams import AlphaEditHyperParams
 
 # Cache variable(s)
@@ -50,20 +50,22 @@ def apply_AlphaEdit_to_model(
         model = deepcopy(model)
 
     # Calculate the null-space projection matrix P
-    # After switching models, the old P will raise error when editing, thus set P to be calculated locally everytime
-    if os.path.exists(hparams.P_loc):
-        os.remove(hparams.P_loc)
-    print(f"The null-space projection matrix P does not exist and now calculate.")
-    W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
-    if "llama" in hparams.model_name.lower() or "gpt-j-6b" in hparams.model_name.lower():
-        P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
-    elif "gpt2-xl" in hparams.model_name.lower():
-        P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
-    del W_out
-    for i, layer in enumerate(hparams.layers):
-        P[i, :, :] = get_project(model, tok, layer, hparams)
-    torch.save(P, "null_space_project.pt")
-    P_loaded = True
+    # After switching models, the old P will raise error when editing, thus here set P to be calculated locally everytime
+    if not os.path.exists(hparams.P_loc):
+        print(f"The null-space projection matrix P does not exist and now calculate.")
+        W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
+        if "llama" in hparams.model_name.lower() or "gpt-j-6b" in hparams.model_name.lower():
+            P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
+        elif "gpt2-xl" in hparams.model_name.lower():
+            P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
+        del W_out
+        for i, layer in enumerate(hparams.layers):
+            P[i, :, :] = get_project(model, tok, layer, hparams)
+        torch.save(P, "null_space_project.pt")
+        P_loaded = True
+    elif P_loaded == False:
+        P = torch.load(hparams.P_loc)
+        P_loaded = True
 
     # Maintain the global variable cache_c to avoid redundant computations.
     # If this is the first calculation (i.e., cache_c_new == false), then initialize cache_c first
@@ -156,7 +158,7 @@ def execute_AlphaEdit(
         ):
             try:
                 data = np.load(cache_fname)
-                z_list.append(torch.from_numpy(data["v_star"]).to(f"cuda:{hparams.device}"))
+                z_list.append(torch.from_numpy(data["v_star"]).to(f"cuda"))
                 data_loaded = True
             except Exception as e:
                 print(f"Error reading cache file due to {e}. Recomputing...")
@@ -175,9 +177,10 @@ def execute_AlphaEdit(
             z_list.append(cur_z)
 
             if cache_fname is not None:
-                cache_fname.parent.mkdir(exist_ok=True, parents=True)
+                file_path = os.getcwd() + "/" + str(cache_fname.parent)
+                os.makedirs(file_path, exist_ok=True)
                 np.savez(
-                    cache_fname,
+                    os.getcwd() + "/" + str(cache_fname),
                     **{
                         "v_star": cur_z.detach().cpu().numpy(),
                     },
@@ -202,7 +205,8 @@ def execute_AlphaEdit(
             words=[request["subject"] for request in requests],
             module_template=hparams.layer_module_tmp,
             fact_token_strategy=hparams.fact_token,
-        )[1].T
+            track='out'
+        ).T
         targets = zs - cur_zs
         print("z error", torch.linalg.norm(targets, dim=0).mean())
 

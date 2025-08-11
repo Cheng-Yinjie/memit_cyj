@@ -1,15 +1,8 @@
-import ast
-import json
 import os
 import re
-from abc import ABC, abstractmethod
-from datetime import date, datetime
-from os.path import join
-from typing import Dict
 
 import pandas as pd
 import torch
-from datasets import load_dataset
 from peft_local import PeftModel as PeftModel_Local
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -18,7 +11,8 @@ def model_load(
         model_path: str,
         model_name: str = " ",
         adapter_path: str = " ",
-        adapter_name: str = " "
+        adapter_name: str = " ",
+        load_dtype: any = None,
 ):
     def keyword_detector(keyword, folder_path):
         if (not folder_path) or (not os.path.exists(folder_path)):
@@ -43,10 +37,11 @@ def model_load(
 
     # Load model and tokenizer
     model_path_fnl, token_path_fnl, adapter_flag = parse_args()
+    load_dtype = load_dtype if load_dtype else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
         model_path_fnl,
         device_map="auto",
-        torch_dtype=torch.float16,
+        torch_dtype=load_dtype,
         trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(token_path_fnl, trust_remote_code=True)
 
@@ -88,6 +83,7 @@ class Prompt4Lora:
     """
     configs for tokenizer and prompts settings
     """
+
     def __init__(self, tokenizer, cutoff_len, model_name, train_on_inputs):
         self.tokenizer = tokenizer
         self.cutoff_len = cutoff_len
@@ -118,41 +114,18 @@ class Prompt4Lora:
         else:
             return result
 
-    @staticmethod
-    def generate_prompt(data_point):
-        if data_point["input"]:
-            return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
-
-                    ### Instruction:
-                    {data_point["instruction"]}
-
-                    ### Input:
-                    {data_point["input"]}
-
-                    ### Response:
-                    {data_point["output"]}"""
-        else:
-            return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
-
-                    ### Instruction:
-                    {data_point["instruction"]}
-
-                    ### Response:
-                    {data_point["output"]}"""
-
     def generate_and_tokenize_prompt(self, data_point):
-        full_prompt = self.generate_prompt(data_point)
+        generate_prompt, _ = customize_prompt(self.model_name)
+        full_prompt = generate_prompt(data_point.get("instruction"), data_point.get("input", None),
+                                      data_point.get("output"))
         tokenized_full_prompt = self.tokenize(full_prompt)
         if not self.train_on_inputs:
-            user_prompt = self.generate_prompt({**data_point, "output": ""})
+            user_prompt = generate_prompt(data_point.get("instruction"), data_point.get("input", None), "")
             tokenized_user_prompt = self.tokenize(user_prompt, add_eos_token=False)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
-            tokenized_full_prompt["labels"] = [
-                                                  -100
-                                              ] * user_prompt_len + tokenized_full_prompt["labels"][
-                                                                    user_prompt_len:
-                                                                    ]  # could be sped up, probably
+            tokenized_full_prompt["labels"] = [-100] * user_prompt_len + tokenized_full_prompt["labels"][
+                                                                         user_prompt_len:]
         return tokenized_full_prompt
 
     def dataset_splitter(self, data, val_set_size):
@@ -170,8 +143,58 @@ class Prompt4Lora:
             val_data = (
                 train_val["test"].shuffle().map(self.generate_and_tokenize_prompt)
             )
-            del train_val
         else:
             train_data = data["train"].shuffle().map(self.generate_and_tokenize_prompt)
             val_data = None
         return train_data, val_data
+
+
+def customize_prompt(model_name: str):
+    def generate_prompt_llama(instruction: str, input=None, output=""):
+        if input:
+            return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
+
+                    ### Instruction:
+                    {instruction}
+
+                    ### Input:
+                    {input}
+
+                    ### Response:
+                    {output}"""
+        else:
+            return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
+
+                    ### Instruction:
+                    {instruction}
+
+                    ### Response:
+                    {output}"""
+
+    def generate_prompt_gpt(instruction: str, input=None, output=""):
+        if input:
+            return f"""Question: {instruction}\nInput: {input}\nAnswer: {output}"""
+        else:
+            return f"""Question: {instruction}\nAnswer: {output}"""
+
+    if "llama" in model_name.lower():
+        return generate_prompt_llama, "### Response:"
+    elif "gpt" in model_name.lower():
+        return generate_prompt_gpt, "Answer:"
+    else:
+        raise ValueError("model not supported")
+
+
+def find_max_checkpoint_folder(base_dir):
+    pattern = re.compile(r'^checkpoint-(\d+)$')
+    max_num = -1
+    max_folder = None
+
+    for name in os.listdir(base_dir):
+        match = pattern.match(name)
+        if match:
+            num = int(match.group(1))
+            if num > max_num:
+                max_num = num
+                max_folder = name
+    return max_folder

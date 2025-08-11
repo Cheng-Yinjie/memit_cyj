@@ -17,7 +17,7 @@ import torch
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
 from tqdm import tqdm
 from transformers import GenerationConfig
-from util.edit_inherit import model_load
+from util.edit_inherit import model_load, customize_prompt
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -35,6 +35,7 @@ def main():
     args = parse_args()
 
     def evaluate(
+            model_name,
             instructions,
             input=None,
             temperature=0.1,
@@ -44,6 +45,7 @@ def main():
             max_new_tokens=32,
             **kwargs,
     ):
+        generate_prompt, ans_prefix = customize_prompt(model_name)
         prompts = [generate_prompt(instruction, input) for instruction in instructions]
         inputs = tokenizer(prompts, return_tensors="pt", padding=True)
         input_ids = inputs["input_ids"].to(device)
@@ -66,11 +68,14 @@ def main():
             )
         s = generation_output.sequences
         outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
-        outputs = [o.split("### Response:")[-1].strip() for o in outputs]
+        outputs = [o.split(ans_prefix)[-1].strip() for o in outputs]
         return outputs
 
     model_name = args.model_name.split("/")[-1]
-    save_folder_path = f"{args.model_path}_downstream_results"
+    if args.adapter_name.lower() not in ["lora", "dora"]:
+        save_folder_path = f"{args.model_path}_downstream_results"
+    else:
+        save_folder_path = f"{args.adapter_path}_downstream_results"
     save_file = f'{save_folder_path}/{model_name}-{args.adapter_name}-{args.dataset}.json'
     create_dir(f'{save_folder_path}/')
 
@@ -94,8 +99,7 @@ def main():
         current += len(batch)
         instructions = [data.get('instruction') for data in batch]
 
-        outputs = evaluate(instructions)
-
+        outputs = evaluate(args.model_name, instructions)
         for data, output in zip(batch, outputs):
             label = data.get('answer')
             flag = False
@@ -122,28 +126,6 @@ def create_dir(dir_path):
     return
 
 
-def generate_prompt(instruction, input=None):
-    if input:
-        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
-
-                ### Instruction:
-                {instruction}
-
-                ### Input:
-                {input}
-
-                ### Response:
-                """  # noqa: E501
-    else:
-        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request. 
-
-                ### Instruction:
-                {instruction}
-
-                ### Response:
-                """  # noqa: E501
-
-
 def load_data(args) -> list:
     """
     read data from dataset file
@@ -158,6 +140,7 @@ def load_data(args) -> list:
         raise FileNotFoundError(f"can not find dataset file : {file_path}")
     json_data = json.load(open(file_path, 'r'))
     return json_data
+
 
 def create_batch(dataset, batch_size):
     batches = []
@@ -175,7 +158,7 @@ def parse_args():
                                  "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"],
                         required=True)
     parser.add_argument('--model_name', required=True)
-    parser.add_argument('--adapter_name', choices=['LoRA', 'DoRA', "Initial"], required=True, default="Initial")
+    parser.add_argument('--adapter_name')
     parser.add_argument('--model_path')
     parser.add_argument('--adapter_path')
     parser.add_argument('--batch_size', type=int, required=True)

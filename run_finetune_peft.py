@@ -15,7 +15,7 @@ from peft_local.src.peft import (
     prepare_model_for_int8_training,
     get_peft_model,
     get_peft_model_state_dict)
-from util.edit_inherit import Prompt4Lora, model_load
+from util.edit_inherit import Prompt4Lora, model_load, find_max_checkpoint_folder
 
 
 def run_finetune(
@@ -44,7 +44,6 @@ def run_finetune(
     Wdecompose_target_modules: List[str] = None,
     # llm parameters
     train_on_inputs: bool = True,
-    resume_from_checkpoint: str = None
     ):
     # Set up model and tokenizer
     model, tokenizer = model_load(model_folder_path, model_name)
@@ -82,21 +81,7 @@ def run_finetune(
     model = get_peft_model(model, config)
     data = load_dataset("json", data_files=os.path.join(os.getcwd(), data_path))
     model.print_trainable_parameters()
-
-    if val_set_size > 0:
-        train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
-        )
-        train_data = (
-            train_val["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
-        )
-        val_data = (
-            train_val["test"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
-        )
-        del train_val
-    else:
-        train_data = data["train"].shuffle().map(prompt_cfg.generate_and_tokenize_prompt)
-        val_data = None
+    train_data, val_data = prompt_cfg.dataset_splitter(data, val_set_size)
 
     trainer = transformers.Trainer(
         model=model,
@@ -134,8 +119,8 @@ def run_finetune(
             self, old_state_dict()
         )
     ).__get__(model, type(model))
-
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    resumed_checkpoint_path = None if not find_max_checkpoint_folder(output_dir) else f"{output_dir}/{find_max_checkpoint_folder(output_dir)}"
+    trainer.train(resume_from_checkpoint=resumed_checkpoint_path)
     model.save_pretrained(output_dir)
 
 
