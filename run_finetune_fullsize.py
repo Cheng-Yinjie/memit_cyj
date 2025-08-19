@@ -1,46 +1,73 @@
 import gc
-import json
-import logging
-import math
 import os
-import shutil
-from pathlib import Path
-from tqdm import tqdm
+from typing import List
 
 import fire
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.optim import AdamW
-from transformers import get_scheduler
+import transformers
+from datasets import load_dataset
 
-from util.edit_inherit import model_load
+from util.edit_inherit import Prompt4Lora, model_load, find_max_checkpoint_folder
+from peft_local.src.peft import (
+    LoraConfig,
+    DoraConfig,
+    prepare_model_for_int8_training,
+    get_peft_model,
+    get_peft_model_state_dict
+)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 
 def run_finetune(
-        # model settings
         model_folder_path: str,
         model_name: str,
-        # training parameters
         data_path: str = "commonsense_170k.json",
+        # Fine-tuning method selection
+        finetune_method: str = "DoRA",
+        # training parameters
+        batch_size: int = 128,
+        micro_batch_size: int = 4,
         num_epochs: int = 3,
-        batch_size: int = 1,
-        learning_rate: float = 5e-6,  # conservative LR for full finetuning
+        learning_rate: float = None,
+        weight_decay: float = 0.001,
+        use_gradient_checkpointing: bool = False,
+        val_set_size: int = 2000,
+        eval_step: int = 200,
+        save_step: int = 200,
         cutoff_len: int = 256,
-        warmup_ratio: float = 0.01,  # warmup fraction of total steps
-        # basic settings
-        prefetch: bool = False,  # set True if you want dataset fully loaded in memory
-        log_step: int = 50,
-        save_step: int = 5000,
+        # PEFT parameters (only used for lora/dora)
+        lora_r: int = 8,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.05,
+        target_modules: List[str] = None,
+        # DoRA specific parameters
+        dora_simple: bool = True,
+        wdecompose_target_modules: List[str] = None,
+        # Full fine-tuning specific parameters
+        warmup_ratio: float = 0.1,
+        adam_epsilon: float = 1e-8,
+        max_grad_norm: float = 1.0,
+        # llm parameters
+        train_on_inputs: bool = True,
+        use_int8_training: bool = False,
 ):
-    def monitor_checkpoints(folder_path, pattern):
-        """Find the latest checkpoint and total checkpoints nubmers"""
-        checkpoints = [f for f in os.listdir(folder_path) if "checkpoint-" in f]
-        if not checkpoints:
-            return None, 0
-        steps = [int(f.split('-')[1]) for f in checkpoints]
-        final_step = max(steps) if pattern == "max" else min(steps)
-        return f"checkpoint-{final_step}", len(steps)
+    # Validate fine-tuning method
+    finetune_method = finetune_method.lower()
+    if finetune_method not in ["lora", "dora", "full"]:
+        raise ValueError(f"Invalid finetune_method: {finetune_method}. Choose from 'LoRA', 'DoRA', or 'full'")
 
+    # Set default hyperparameters based on method
+    if learning_rate is None:
+        learning_rate = 3e-4 if finetune_method in ["lora", "dora"] else 2e-5
+    if weight_decay is None:
+        weight_decay = 0.0 if finetune_method in ["lora", "dora"] else 0.01
+
+    # Adjust gradient checkpointing default based on method
+    use_gradient_checkpointing = True if finetune_method == "full" else use_gradient_checkpointing
+
+    # Load model and tokenizer
     def bf16_supported():
         if not torch.cuda.is_available():
             return False
@@ -49,186 +76,160 @@ def run_finetune(
         except Exception:
             return False
 
-    # initiations
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        level=logging.INFO
-    )
-    logger = logging.getLogger(__name__)
-    output_dir = f"{model_folder_path}_fullft"
-    os.makedirs(output_dir, exist_ok=True)
-
-    # basic settings
     use_bf16 = bf16_supported()
     use_fp16 = (not use_bf16) and torch.cuda.is_available()
     torch_dtype = torch.bfloat16 if use_bf16 else (torch.float16 if use_fp16 else torch.float32)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Device: {device}, use_bf16={use_bf16}, use_fp16={use_fp16}")
+    model, tokenizer = model_load(
+        model_path=model_folder_path,
+        model_name=model_name,
+        load_dtype=torch_dtype)
 
-    # set up model and tokenizer
-    latest_checkpoint, _ = monitor_checkpoints(output_dir, "max")
-    if latest_checkpoint:
-        logger.info(f"Found latest checkpoint: {latest_checkpoint} at step {latest_checkpoint}")
-        model, tokenizer = model_load(
-            model_path=Path(output_dir) / latest_checkpoint,
-            model_name=model_name,
-            load_dtype=torch_dtype
-        )
-        global_step = int(latest_checkpoint.split("-")[1])
-    else:
-        logger.info(f"No checkpoint found, loading model {model_name} from {model_folder_path}")
-        model, tokenizer = model_load(
-            model_path=model_folder_path,
-            model_name=model_name,
-            load_dtype=torch_dtype
-        )
-        global_step = 0
-    logger.info(f"Training step starts at {global_step}")
+    # Configure model based on peft or full-size
+    if finetune_method in ["lora", "dora"]:
+        if use_int8_training:
+            model = prepare_model_for_int8_training(
+                model, use_gradient_checkpointing=use_gradient_checkpointing
+            )
+        elif use_gradient_checkpointing:
+            model.gradient_checkpointing_enable()
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    if "llama-2" in model.config._name_or_path.lower():
-        tokenizer.padding_side = "right"
-
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.gradient_checkpointing_enable()
-    model.config.use_cache = False
-
-    # prepare dataset
-    class JsonInstructionDataset(Dataset):
-        def __init__(self, path, tokenizer, max_length=1024, preload=False):
-            self.tokenizer = tokenizer
-            self.max_length = max_length
-            if preload:
-                with open(path, "r", encoding="utf-8") as f:
-                    self.samples = json.load(f)
-            else:
-                with open(path, "r", encoding="utf-8") as f:
-                    self.samples = json.load(f)
-
-        def __len__(self):
-            return len(self.samples)
-
-        def _format_prompt(self, instruction, inp, output_text):
-            if inp and inp.strip():
-                prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{inp}\n\n### Response:\n{output_text}"
-            else:
-                prompt = f"### Instruction:\n{instruction}\n\n### Response:\n{output_text}"
-            return prompt
-
-        def __getitem__(self, idx):
-            ex = self.samples[idx]
-            instruction = ex.get("instruction", "")
-            input_text = ex.get("input", "")
-            output_text = ex.get("output", "")
-
-            prompt = self._format_prompt(instruction, input_text, output_text)
-
-            tokenized = self.tokenizer(
-                prompt,
-                truncation=True,
-                max_length=self.max_length,
-                padding="max_length",
-                return_tensors="pt",
+        if finetune_method == "lora":
+            peft_config = LoraConfig(
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM"
+            )
+        else:
+            peft_config = DoraConfig(
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                dora_simple=dora_simple,
+                Wdecompose_target_modules=wdecompose_target_modules
             )
 
-            input_ids = tokenized["input_ids"].squeeze(0)
-            attention_mask = tokenized["attention_mask"].squeeze(0)
-            labels = input_ids.clone()
-            labels[attention_mask == 0] = -100
+        model = get_peft_model(model, peft_config)
 
-            return {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "labels": labels,
-            }
+    else:
+        if use_gradient_checkpointing:
+            model.gradient_checkpointing_enable()
 
-    dataset = JsonInstructionDataset(data_path, tokenizer, cutoff_len, preload=prefetch)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
-    total_steps = num_epochs * math.ceil(len(dataset) / batch_size)
-    warmup_steps = max(1, int(total_steps * warmup_ratio))
+    # Set up tokenizer
+    tokenizer.pad_token_id = 0
+    tokenizer.padding_side = "left"
+    tokenizer.pad_token = tokenizer.eos_token
 
-    # prepare optimizer
-    optimizer = AdamW(model.parameters(), lr=learning_rate)
-    lr_scheduler = get_scheduler(
-        name="linear",
-        optimizer=optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps,
+    gradient_accumulation_steps = batch_size // micro_batch_size
+    prompt_cfg = Prompt4Lora(tokenizer, cutoff_len, model_name, train_on_inputs)
+    output_dir = f"{model_folder_path}_{finetune_method}"
+    data = load_dataset("json", data_files=os.path.join(os.getcwd(), data_path))
+
+    # Print trainable parameters and set up datasets
+    train_data, val_data = prompt_cfg.dataset_splitter(data, val_set_size)
+    if finetune_method in ["lora", "dora"]:
+        model.print_trainable_parameters()
+    else:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Trainable percentage: {100 * trainable_params / total_params:.2f}%")
+
+        columns_to_remove = ['instruction', 'input', 'output', 'answer']
+        train_data = train_data.remove_columns(columns_to_remove)
+        if val_data is not None:
+            val_data = val_data.remove_columns(columns_to_remove)
+
+    # Set up training arguments
+    training_args_dict = {
+        "per_device_train_batch_size": micro_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_train_epochs": num_epochs,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "bf16": use_bf16,
+        "fp16": use_fp16,
+        "logging_steps": 10,
+        "optim": "adamw_torch",
+        "eval_strategy": "steps" if val_set_size > 0 else "no",
+        "save_strategy": "steps",
+        "eval_steps": eval_step if val_set_size > 0 else None,
+        "save_steps": save_step,
+        "output_dir": output_dir,
+        "save_total_limit": 3,
+        "load_best_model_at_end": True if val_set_size > 0 else False,
+        "report_to": None,
+    }
+
+    # Add method-specific training arguments
+    if finetune_method in ["lora", "dora"]:
+        training_args_dict.update({
+            "warmup_steps": 100,
+            "ddp_find_unused_parameters": None,
+        })
+    else:
+        training_args_dict.update({
+            "warmup_ratio": warmup_ratio,
+            "adam_epsilon": adam_epsilon,
+            "max_grad_norm": max_grad_norm,
+            "ddp_find_unused_parameters": False,
+            "dataloader_num_workers": 0,
+            "remove_unused_columns": False,
+            "group_by_length": True,
+        })
+
+    training_args = transformers.TrainingArguments(**training_args_dict)
+
+    # Initialize trainer
+    trainer = transformers.Trainer(
+        model=model,
+        train_dataset=train_data,
+        eval_dataset=val_data,
+        args=training_args,
+        data_collator=transformers.DataCollatorForSeq2Seq(
+            tokenizer,
+            pad_to_multiple_of=8,
+            return_tensors="pt",
+            padding=True
+        ),
     )
-    scaler = torch.cuda.amp.GradScaler() if use_fp16 else None
 
-    # main training loop
-    model.train()
+    # Disable caching for training
+    model.config.use_cache = False
 
-    for epoch in range(num_epochs):
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}")
-        for batch in pbar:
-            batch = {k: v.to(device) for k, v in batch.items()}
+    # PEFT-specific state dict handling
+    if finetune_method in ["lora", "dora"]:
+        old_state_dict = model.state_dict
+        model.state_dict = (
+            lambda self, *_, **__: get_peft_model_state_dict(
+                self, old_state_dict()
+            )
+        ).__get__(model, type(model))
 
-            optimizer.zero_grad()
+    # Check for existing checkpoints to resume training
+    resumed_checkpoint_path = None
+    max_checkpoint = find_max_checkpoint_folder(output_dir)
+    if max_checkpoint:
+        resumed_checkpoint_path = f"{output_dir}/{max_checkpoint}"
+        print(f"Resuming from checkpoint: {resumed_checkpoint_path}")
 
-            if use_bf16:
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    outputs = model(**batch)
-                    loss = outputs.loss
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+    # Start training
+    trainer.train(resume_from_checkpoint=resumed_checkpoint_path)
 
-            elif use_fp16:
-                with torch.cuda.amp.autocast():
-                    outputs = model(**batch)
-                    loss = outputs.loss
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-
-            else:
-                outputs = model(**batch)
-                loss = outputs.loss
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-
-            lr_scheduler.step()
-            loss_val = loss.item() if isinstance(loss, torch.Tensor) else float(loss)
-
-            # compute gradient norm for logging
-            total_norm = 0.0
-            for p in model.parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.detach().float().norm(2)
-                    total_norm += param_norm.item() ** 2
-            total_norm = math.sqrt(total_norm)
-
-            # logging
-            if global_step % log_step == 0 or global_step < 20:
-                logger.info(
-                    f"Step {global_step}: Loss={loss_val:.4f}, Grad_norm={total_norm:.2e}, LR={lr_scheduler.get_last_lr()[0]:.2e}")
-
-            # save checkpoints periodically
-            if (global_step > 0) and (global_step % save_step == 0):
-                ckpt_dir = Path(output_dir) / f"checkpoint-{global_step}"
-                ckpt_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Saving checkpoint to {ckpt_dir}")
-                model.save_pretrained(str(ckpt_dir))
-                tokenizer.save_pretrained(str(ckpt_dir))
-                # control checkpoints number
-                earlest_ckpt, ckpt_num = monitor_checkpoints(output_dir, "min")
-                if ckpt_num > 3:
-                    shutil.rmtree(Path(output_dir) / earlest_ckpt)
-
-            global_step += 1
-            pbar.set_postfix({"loss": f"{loss_val:.4f}", "grad_norm": f"{total_norm:.2e}",
-                              "lr": f"{lr_scheduler.get_last_lr()[0]:.2e}"})
-
-    # save model and tok
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    logger.info(f"Model and tokenizer saved to {output_dir}")
+    # Save the model
+    if finetune_method in ["lora", "dora"]:
+        model.save_pretrained(output_dir)
+    else:
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+    print(f"Model saved to {output_dir}")
+    print(f"Fine-tuning method used: {finetune_method}")
 
 
 if __name__ == "__main__":
