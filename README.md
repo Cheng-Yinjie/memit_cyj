@@ -8,7 +8,7 @@
 - [Examples](#examples)
   - [Basic Points](#basic-points)
   - [Model Editing](#example-1-model-editing)
-  - [Model Finetuning](#example-2-model-finetuning)
+  - [Model fine-tuning](#example-2-model-fine-tuning)
   - [Downstream tasks evaluation](#example-3-downstream-tasks-evaluation)
   - [Perplexity Index](#example-4-perplexity-index)
   - [Manual Conversation](#example-5-manual-conversation)
@@ -40,10 +40,10 @@ conda install --name $ENV_NAME --file requirements.txt -y
 
 
 ### **2. Datasets**
-#### 2.1. Datasets for finetuning and evaluation
-To finetune our models, we use [Commonsense 170k](https://github.com/AGI-Edgerunners/LLM-Adapters/blob/main/ft-training_set/commonsense_170k.json) as our finetuning dataset, which is also used in paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/abs/2402.09353). After downloading, put the downloaded file `commonsense_170k.json` under root directory.
+#### 2.1. Datasets for fine-tuning and evaluation
+To fine-tune our models, we use [Commonsense 170k](https://github.com/AGI-Edgerunners/LLM-Adapters/blob/main/ft-training_set/commonsense_170k.json) as our fine-tuning dataset, which is also used in paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/abs/2402.09353). After downloading, put the downloaded file `commonsense_170k.json` under root directory.
 
-To evaluate the finetuned model, we also use downstream tasks introduced in paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/abs/2402.09353), they can be downloaded [here](https://github.com/AGI-Edgerunners/LLM-Adapters/tree/main/dataset). After downloading, organise them as follows:
+To evaluate the fine-tuned model, we also use downstream tasks introduced in paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/abs/2402.09353), they can be downloaded [here](https://github.com/AGI-Edgerunners/LLM-Adapters/tree/main/dataset). After downloading, organise them as follows:
 ```
 # Folder `dataset` put under root directory
 dataset/
@@ -96,7 +96,7 @@ As for code, please refere to function `model_load` in `./util/edit_inherit.py`.
 ```python
 def model_load(model_path: str, model_name: str = " ", adapter_path: str = " ", adapter_name: str = " ")
 ```
-It needs **four** parameters: `model_name`, `model_path`, `adapter_name` and `adapter_path`. `model_name` is the name of the model used. If `model_path` not specified (" " or null), model will be downloaded from Huggingface. If `adapter_name` and `adapter_path` not specofoed, no finetuning adapter shall be loaded, which means the original model will be provided.
+It needs **four** parameters: `model_name`, `model_path`, `adapter_name` and `adapter_path`. `model_name` is the name of the model used. If `model_path` not specified (" " or null), model will be downloaded from Huggingface. If `adapter_name` and `adapter_path` not specofoed, no fine-tuning adapter shall be loaded, which means the original model will be provided.
 
 
 ### **Example 1. Model Editing**
@@ -131,45 +131,37 @@ EVAL_ONLY=0
 MODEL_SAVE=1
 ```
 
-### **Example 2. Model Finetuning**
-We use `run_finetune.sh` as the entrance script to launch a fine-tuning, it fine-tunes the model in LoRA, DoRA or Full-size fine-tuning. LoRA / Dora are PEFT (Parameter-Efficient Fine-Tuning) and they are employed by calling `run_finetune_peft.py`. Full-size fine-tuning are employed by calling `run_finetune_fullsize.sh`.
-
-Input the following commands in the terminal to run editing, the outputs are adapters in the form of `bin` files:
+### **Example 2. Model fine-tuning**
+We use `run_fine-tune.py` as the script to launch a fine-tuning, it fine-tunes the model in LoRA, DoRA or Full-size fine-tuning. Below code block demonstrates examples of the parameters for different fine-tuning methods, `MODEL_NAME`, `MODEL_PATH`, `ADAPTER_NAME` and `ADAPTER_PATH` are input parameters for function model_load introduced in [Load model with adapters](#12-load-model-with-adapters). The rest parameters are used for fine-tuning config, users can refer to [DoRA github](https://github.com/NVlabs/DoRA/blob/main/commonsense_reasoning/README.md).
 ```bash
-# Submit to HPC
-sbatch run_finetune.sh
-# Run with nodes or local devices
-bash run_finetune.sh
-```
-Below code block demonstrates the parameters for model editing, `MODEL_NAME`, `MODEL_PATH`, `ADAPTER_NAME` and `ADAPTER_PATH` are input parameters for function model_load introduced in [Load model with adapters](#12-load-model-with-adapters). The rest parameters are used for finetuning config, users can refer to [DoRA github](https://github.com/NVlabs/DoRA/blob/main/commonsense_reasoning/README.md). Below is an example of dora scipt parameters:
-```bash
-# Dora llama2-7b
-python run_dora.py \
+# DoRA llama2-7b
+python run_fine-tune.py \
     --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
-    --data_path 'commonsense_170k.json' --adapter_name 'dora' \
+    --data_path 'commonsense_170k.json' --fine-tune_method 'dora' \
     --batch_size 16  --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
     --use_gradient_checkpointing True --val_set_size 120 --eval_step 80 --save_step 80 \
     --cutoff_len 256 --lora_r 32 --lora_alpha 64 --lora_dropout 0.05 --dora_simple True \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
 
-# Lora llama2-7b
-python run_dora.py \
+# LoRA llama2-7b
+python run_fine-tune.py \
     --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
-    --data_path 'commonsense_170k.json' --adapter_name 'lora' \
+    --data_path 'commonsense_170k.json' --fine-tune_method 'lora' \
     --batch_size 16 --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
     --use_gradient_checkpointing True --val_set_size 120 --eval_step 80 --save_step 80 \
     --cutoff_len 256 --lora_r 32 --lora_alpha 64 --lora_dropout 0.05 --dora_simple True \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
 
-# Full-size finetune llama2-7b
-python run_finetune_fullsize.py \
-    --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_1000" --model_name 'meta-llama/Llama-2-7b-hf' \
-    --data_path 'commonsense_170k.json' --learning_rate 5e-6 --batch_size 1 --num_epochs 3 \
-    --save_step 5000 --log_step 20  --cutoff_len 1024
+# Full fine-tune llama2-7b
+python run_fine-tune_fullsize.py \
+    --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_100_full" --model_name 'meta-llama/Llama-2-7b-hf' \
+    --data_path 'commonsense_170k.json' --fine-tune_method "full" --learning_rate 5e-6 --batch_size 32 \
+    --num_epochs 2 --fine-tune_method "full" --save_step 10000 --cutoff_len 1024 \
+    --use_gradient_checkpointing True
 ```
 
 ### **Example 3. Downstream Tasks Evaluation**
-Downstream tasks are used to evaluate the effectiveness of the model after editing/finetuning. There are 8 tasks ("boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa") evaluating the effectiveness of the model. It is put forward in the paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/pdf/2402.09353). `run_downstream_tasks.py` and `run_downstream_tasks.sh` are scripts related. Input the following commands in the terminal to run editing:
+Downstream tasks are used to evaluate the effectiveness of the model after editing/fine-tuning. There are 8 tasks ("boolq", "piqa", "siqa_ca", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa") evaluating the effectiveness of the model. It is put forward in the paper [DoRA: Weight-Decomposed Low-Rank Adaptation](https://arxiv.org/pdf/2402.09353). `run_downstream_tasks.py` and `run_downstream_tasks.sh` are scripts related. Input the following commands in the terminal to run editing:
 ```bash
 # Submit to HPC
 sbatch run_downstream_tasks.sh

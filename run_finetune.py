@@ -19,7 +19,6 @@ from peft_local.src.peft import (
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-
 def run_finetune(
         model_folder_path: str,
         model_name: str,
@@ -37,6 +36,8 @@ def run_finetune(
         eval_step: int = 200,
         save_step: int = 200,
         cutoff_len: int = 256,
+        # Finetune layer setup
+        ft_layers: list = None,
         # PEFT parameters (only used for lora/dora)
         lora_r: int = 8,
         lora_alpha: int = 32,
@@ -86,6 +87,16 @@ def run_finetune(
 
     # Configure model based on peft or full-size
     if finetune_method in ["lora", "dora"]:
+        # Specify layers to be finetuned
+        target_modules_fnl = list()
+        if ft_layers:
+            if "llama-2" in model_name.lower():
+                for layer_idx in ft_layers:
+                    for module_name in target_modules:
+                        target_modules_fnl.append(f"model.layers.{layer_idx}.self_attn.{module_name}")
+        else:
+            target_modules_fnl = target_modules
+
         if use_int8_training:
             model = prepare_model_for_int8_training(
                 model, use_gradient_checkpointing=use_gradient_checkpointing
@@ -97,7 +108,7 @@ def run_finetune(
             peft_config = LoraConfig(
                 r=lora_r,
                 lora_alpha=lora_alpha,
-                target_modules=target_modules,
+                target_modules=target_modules_fnl,
                 lora_dropout=lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM"
@@ -106,7 +117,7 @@ def run_finetune(
             peft_config = DoraConfig(
                 r=lora_r,
                 lora_alpha=lora_alpha,
-                target_modules=target_modules,
+                target_modules=target_modules_fnl,
                 lora_dropout=lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM",
@@ -127,7 +138,7 @@ def run_finetune(
 
     gradient_accumulation_steps = batch_size // micro_batch_size
     prompt_cfg = Prompt4Lora(tokenizer, cutoff_len, model_name, train_on_inputs)
-    output_dir = f"{model_folder_path}_{finetune_method}"
+    output_dir = f"{model_folder_path}_{finetune_method}" if not ft_layers else f"{model_folder_path}_{finetune_method}_few"
     data = load_dataset("json", data_files=os.path.join(os.getcwd(), data_path))
 
     # Print trainable parameters and set up datasets
