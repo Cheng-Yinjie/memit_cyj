@@ -66,10 +66,10 @@ To be notice, for Llama series, there are extra authentication steps:
  - Add login command in bash scripts or input it in the terminal, as follows:
     ```bash
     # Add in bash scripts
-    huggingface-cli login --token $YOUR_HF_TOKEN
+    hf auth login --token $YOUR_HF_TOKEN
 
     # input in terminal and then enter token as it instructs
-    huggingface-cli login
+    hf auth login
     ```
 
   
@@ -132,10 +132,10 @@ MODEL_SAVE=1
 ```
 
 ### **Example 2. Model fine-tuning**
-We use `run_fine-tune.py` as the script to launch a fine-tuning, it fine-tunes the model in LoRA, DoRA or Full-size fine-tuning. Below code block demonstrates examples of the parameters for different fine-tuning methods, `MODEL_NAME`, `MODEL_PATH`, `ADAPTER_NAME` and `ADAPTER_PATH` are input parameters for function model_load introduced in [Load model with adapters](#12-load-model-with-adapters). The rest parameters are used for fine-tuning config, users can refer to [DoRA github](https://github.com/NVlabs/DoRA/blob/main/commonsense_reasoning/README.md).
+We use `run_finetune.py` as the script to launch a fine-tuning, it fine-tunes the model in LoRA, DoRA or Full-size fine-tuning. Below code block demonstrates examples of the parameters for different fine-tuning methods, `MODEL_NAME`, `MODEL_PATH`, `ADAPTER_NAME` and `ADAPTER_PATH` are input parameters for function model_load introduced in [Load model with adapters](#12-load-model-with-adapters). The rest parameters are used for fine-tuning config, users can refer to [DoRA github](https://github.com/NVlabs/DoRA/blob/main/commonsense_reasoning/README.md).
 ```bash
 # DoRA llama2-7b
-python run_fine-tune.py \
+python run_finetune.py \
     --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
     --data_path 'commonsense_170k.json' --fine-tune_method 'dora' \
     --batch_size 16  --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
@@ -144,7 +144,7 @@ python run_fine-tune.py \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
 
 # LoRA llama2-7b
-python run_fine-tune.py \
+python run_finetune.py \
     --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_10000" --model_name 'meta-llama/Llama-2-7b-hf' \
     --data_path 'commonsense_170k.json' --fine-tune_method 'lora' \
     --batch_size 16 --micro_batch_size 16 --num_epochs 3 --learning_rate 2e-4 --weight_decay 0.0 \
@@ -153,7 +153,7 @@ python run_fine-tune.py \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' --train_on_inputs True
 
 # Full fine-tune llama2-7b
-python run_fine-tune_fullsize.py \
+python run_finetune.py \
     --model_folder_path "Llama-2-7b-hf-AlphaEdit_mcf_100_full" --model_name 'meta-llama/Llama-2-7b-hf' \
     --data_path 'commonsense_170k.json' --fine-tune_method "full" --learning_rate 5e-6 --batch_size 32 \
     --num_epochs 2 --fine-tune_method "full" --save_step 10000 --cutoff_len 1024 \
